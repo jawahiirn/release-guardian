@@ -34,6 +34,9 @@ h1, h2, p { margin-top: 0; } h1 { margin-bottom: 12px; font-size: clamp(30px, 4v
 .inline-form, .secret-form, .button-row, .integration-heading, .section-heading { display: flex; align-items: center; gap: 10px; }
 .inline-form, .secret-form { margin-top: 16px; } .secret-form input { flex: 1; }
 .integration-list { display: grid; gap: 14px; } .integration-heading { justify-content: space-between; align-items: start; } .integration-card h3 { margin: 7px 0 0; font-size: 18px; }
+.project-list { display: grid; gap: 14px; } .project-card { display: grid; gap: 12px; padding: 20px; border: 1px solid #1e293b; border-radius: 12px; background: #111827; } .project-card h3 { margin: 7px 0 0; font-size: 18px; }
+.project-meta { display: flex; flex-wrap: wrap; gap: 18px; color: #94a3b8; font-size: 12px; } .code { color: #bfdbfe; font-family: ui-monospace, SFMono-Regular, monospace; }
+.event-list { display: grid; gap: 12px; margin-top: 14px; } .event-row { display: flex; justify-content: space-between; align-items: start; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #1e293b; } .event-row:last-child { padding-bottom: 0; border-bottom: 0; } .event-row strong, .event-row .muted { display: block; } .event-row .muted { margin-top: 4px; font-size: 12px; }
 .section-heading { justify-content: space-between; margin: 34px 0 14px; } .section-heading h2 { margin: 7px 0 0; }
 .pill { padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; } .pill-good { color: #86efac; background: #14532d; } .pill-muted { color: #cbd5e1; background: #334155; }
 .success { color: #86efac; font-size: 13px; } .error { color: #fca5a5; font-size: 13px; }

@@ -18,6 +18,31 @@ export type Integration = {
   has_secret: boolean;
   secret_updated_at: string | null;
 };
+export type Project = {
+  id: string;
+  organization_id: string;
+  gitlab_integration_id: string;
+  external_project_id: string;
+  name: string;
+  branch_config: Record<string, string>;
+  polling_interval_seconds: number;
+  enabled: boolean;
+  last_poll_at: string | null;
+  last_success_at: string | null;
+  next_poll_at: string | null;
+  last_error: string | null;
+};
+export type ReleaseEvent = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  source: string;
+  event_type: string;
+  meaningful_state_version: string;
+  occurred_at: string | null;
+  observed_at: string;
+  facts: Record<string, unknown>;
+};
 
 let csrfToken: string | null = null;
 
@@ -81,5 +106,36 @@ export async function validateIntegration(integrationId: string): Promise<{ mess
     {},
     { headers: csrfHeaders() },
   );
+  return response.data;
+}
+
+export async function listProjects(organizationId: string): Promise<Project[]> {
+  const response = await api.get<Project[]>(`/api/v1/organizations/${organizationId}/projects`);
+  return response.data;
+}
+
+export async function createProject(
+  organizationId: string,
+  input: { gitlab_integration_id: string; external_project_id: string; name: string },
+): Promise<Project> {
+  const response = await api.post<Project>(
+    `/api/v1/organizations/${organizationId}/projects`,
+    input,
+    { headers: csrfHeaders() },
+  );
+  return response.data;
+}
+
+export async function pollProject(projectId: string): Promise<{ project_id: string; status: string }> {
+  const response = await api.post<{ project_id: string; status: string }>(
+    `/api/v1/projects/${projectId}/poll-now`,
+    {},
+    { headers: csrfHeaders() },
+  );
+  return response.data;
+}
+
+export async function listEvents(organizationId: string): Promise<ReleaseEvent[]> {
+  const response = await api.get<ReleaseEvent[]>(`/api/v1/organizations/${organizationId}/events`);
   return response.data;
 }

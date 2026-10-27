@@ -71,10 +71,10 @@ The frontend now includes a sign-in screen and an Integrations workspace. It sup
 
 ## Milestone 3 monitoring slice
 
-The current monitoring slice adds GitLab project registration and a PostgreSQL-backed polling worker. Use Swagger to call `POST /api/v1/organizations/{organization_id}/projects`, omitting `polling_interval_seconds` to use the 300-second default, then use `POST /api/v1/projects/{project_id}/poll-now` to schedule an immediate read-only poll. Project state is available from `GET /api/v1/organizations/{organization_id}/projects`.
+The current monitoring slice adds GitLab project registration and a PostgreSQL-backed polling worker. The Projects workspace is available in the frontend after sign-in; it registers projects, displays polling state, schedules an immediate read-only poll, and shows recent observed events. The same operations are available in Swagger through `POST /api/v1/organizations/{organization_id}/projects`, `POST /api/v1/projects/{project_id}/poll-now`, `GET /api/v1/organizations/{organization_id}/projects`, and `GET /api/v1/organizations/{organization_id}/events`.
 
 The worker persists polling checkpoints and canonical failed-pipeline events with bounded failed-job evidence. Event uniqueness prevents duplicate events when the same pipeline state is observed again. Actual GitLab requests are read-only and require the GitLab hostname to be listed in `GITLAB_ALLOWED_HOSTS`; the default is `gitlab.com`. The first monitoring tests use injected fixtures and do not contact a real GitLab account.
 
 ## Current scope
 
-Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 includes integration configuration UI and provider-shape validation. Milestone 3 now includes the first GitLab project/polling/event slice; AI analysis and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.
+Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 includes integration configuration UI and provider-shape validation. Milestone 3 now includes the GitLab Projects UI plus the first polling/event slice; AI analysis and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.

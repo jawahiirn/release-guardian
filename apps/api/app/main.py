@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text
@@ -47,6 +47,10 @@ app = FastAPI(
         {
             "name": "projects",
             "description": "Organization-scoped GitLab monitoring projects and polling state.",
+        },
+        {
+            "name": "events",
+            "description": "Organization-scoped observed GitLab events.",
         },
     ],
 )
@@ -157,6 +161,18 @@ class ProjectResponse(BaseModel):
 class PollNowResponse(BaseModel):
     project_id: str
     status: Literal["scheduled"]
+
+
+class EventResponse(BaseModel):
+    id: str
+    organization_id: str
+    project_id: str
+    source: str
+    event_type: str
+    meaningful_state_version: str
+    occurred_at: datetime | None = None
+    observed_at: datetime
+    facts: dict[str, object]
 
 
 def require_org_admin(connection, organization_id: str, user_id: str) -> None:
@@ -823,3 +839,45 @@ def poll_now(project_id: UUID, session: Annotated[dict, Depends(require_csrf)]) 
             {},
         )
     return {"project_id": project_key, "status": "scheduled"}
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/events",
+    response_model=list[EventResponse],
+    tags=["events"],
+    summary="List observed events for an organization",
+)
+def list_events(
+    organization_id: str,
+    session: Annotated[dict, Depends(current_session)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT id, organization_id, project_id, source, event_type,
+                           meaningful_state_version, occurred_at, observed_at,
+                           facts_json AS facts
+                    FROM events
+                    WHERE organization_id = :organization_id
+                    ORDER BY observed_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"organization_id": organization_id, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+            "project_id": str(row["project_id"]),
+        }
+        for row in rows
+    ]

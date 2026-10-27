@@ -441,7 +441,7 @@ Write-only secret update payloads MUST be excluded from response serialization a
 ### Milestone 3 — GitLab monitoring
 
 - First vertical slice: add read-only GitLab project registration, a default 300-second polling interval with bounds, PostgreSQL polling checkpoints and leases, an allowlisted GitLab HTTP adapter, failed-pipeline collection, bounded failed-job evidence, and canonical event deduplication.
-- Follow-up slices add persisted cursors, MR/ref collectors, richer traces, retry dashboards, and the project UI without introducing a separate queue service.
+- Follow-up slices add persisted cursors, MR/ref collectors, richer traces, and retry dashboards without introducing a separate queue service. The initial Projects UI and organization-scoped observed-event view are included in this slice.
 - **Done when:** fixture-driven failed pipelines create one accurate event with links/evidence, repeated observations create no duplicate event, project polling state is persisted, organization isolation is enforced, and no GitLab write operation is exposed. Full Stage/Main composition remains incomplete until the follow-up collector slice.
 
 ### Milestone 4 — AI analysis

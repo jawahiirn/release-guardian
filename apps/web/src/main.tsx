@@ -7,9 +7,14 @@ import {
   createIntegration,
   createOrganization,
   Integration,
+  createProject,
   listIntegrations,
+  listEvents,
   listOrganizations,
+  listProjects,
   login,
+  pollProject,
+  Project,
   rotateIntegrationSecret,
   validateIntegration,
 } from "./lib/api";
@@ -69,6 +74,26 @@ function IntegrationCard({ integration, organizationId }: { integration: Integra
   );
 }
 
+function ProjectCard({ project, organizationId }: { project: Project; organizationId: string }) {
+  const queryClient = useQueryClient();
+  const poll = useMutation({
+    mutationFn: () => pollProject(project.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["projects", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["events", organizationId] });
+    },
+  });
+  return (
+    <article className="project-card">
+      <div className="integration-heading"><div><span className="label">GitLab project</span><h3>{project.name}</h3></div><span className={`pill ${project.enabled ? "pill-good" : "pill-muted"}`}>{project.enabled ? "Enabled" : "Disabled"}</span></div>
+      <p className="muted"><span className="code">{project.external_project_id}</span> · polls every {project.polling_interval_seconds}s</p>
+      <div className="project-meta"><span>Last success: {project.last_success_at ? new Date(project.last_success_at).toLocaleString() : "Never"}</span><span>Next poll: {project.next_poll_at ? new Date(project.next_poll_at).toLocaleString() : "Pending"}</span></div>
+      {project.last_error && <p className="error">{project.last_error}</p>}
+      <Button variant="ghost" type="button" onClick={() => poll.mutate()} disabled={poll.isPending || !project.enabled}>{poll.isPending ? "Scheduling…" : "Poll now"}</Button>
+    </article>
+  );
+}
+
 function AuthenticatedApp() {
   const queryClient = useQueryClient();
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: listOrganizations });
@@ -79,11 +104,25 @@ function AuthenticatedApp() {
     queryFn: () => listIntegrations(selectedOrganizationId!),
     enabled: Boolean(selectedOrganizationId),
   });
+  const projects = useQuery({
+    queryKey: ["projects", selectedOrganizationId],
+    queryFn: () => listProjects(selectedOrganizationId!),
+    enabled: Boolean(selectedOrganizationId),
+  });
+  const events = useQuery({
+    queryKey: ["events", selectedOrganizationId],
+    queryFn: () => listEvents(selectedOrganizationId!),
+    enabled: Boolean(selectedOrganizationId),
+  });
+  const gitlabIntegrations = integrations.data?.filter((integration) => integration.type === "gitlab") ?? [];
   const [organizationName, setOrganizationName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [type, setType] = useState<Integration["type"]>("gitlab");
   const [baseUrl, setBaseUrl] = useState("https://gitlab.com");
   const [model, setModel] = useState("gpt-5-mini");
+  const [projectName, setProjectName] = useState("");
+  const [externalProjectId, setExternalProjectId] = useState("");
+  const [gitlabIntegrationId, setGitlabIntegrationId] = useState("");
   const createOrg = useMutation({
     mutationFn: () => createOrganization(organizationName),
     onSuccess: () => { setOrganizationName(""); queryClient.invalidateQueries({ queryKey: ["organizations"] }); },
@@ -91,6 +130,18 @@ function AuthenticatedApp() {
   const create = useMutation({
     mutationFn: () => createIntegration(selectedOrganizationId!, { type, display_name: displayName, public_config: type === "gitlab" ? { base_url: baseUrl } : type === "openai" ? { model } : {} }),
     onSuccess: () => { setDisplayName(""); queryClient.invalidateQueries({ queryKey: ["integrations", selectedOrganizationId] }); },
+  });
+  const createMonitoredProject = useMutation({
+    mutationFn: () => createProject(selectedOrganizationId!, {
+      gitlab_integration_id: gitlabIntegrationId || gitlabIntegrations[0]?.id || "",
+      external_project_id: externalProjectId,
+      name: projectName,
+    }),
+    onSuccess: () => {
+      setProjectName("");
+      setExternalProjectId("");
+      queryClient.invalidateQueries({ queryKey: ["projects", selectedOrganizationId] });
+    },
   });
 
   return (
@@ -106,6 +157,13 @@ function AuthenticatedApp() {
         <section className="section-heading"><div><span className="label">Configured providers</span><h2>Integration inventory</h2></div>{integrations.isFetching && <span className="muted">Refreshing…</span>}</section>
         {integrations.isError && <p className="error">Unable to load integrations. Confirm the selected organization and session.</p>}
         <section className="integration-list">{integrations.data?.length ? integrations.data.map((integration) => <IntegrationCard key={integration.id} integration={integration} organizationId={selectedOrganizationId!} />) : <div className="empty-state"><div className="empty-icon">+</div><h2>No integrations yet</h2><p className="muted">Add a provider above. Live provider requests are not made by the local validation action.</p></div>}</section>
+        <section id="projects" className="section-heading"><div><span className="label">GitLab monitoring</span><h2>Projects</h2></div>{projects.isFetching && <span className="muted">Refreshing…</span>}</section>
+        <section className="workspace-grid">
+          <div className="panel"><span className="label">Register project</span>{gitlabIntegrations.length ? <form onSubmit={(event) => { event.preventDefault(); createMonitoredProject.mutate(); }} className="form-stack"><label>GitLab integration<select value={gitlabIntegrationId || gitlabIntegrations[0].id} onChange={(event) => setGitlabIntegrationId(event.target.value)}>{gitlabIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name}</option>)}</select></label><label>Project ID or path<input value={externalProjectId} onChange={(event) => setExternalProjectId(event.target.value)} placeholder="group/project or 123456" required /></label><label>Display name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Staging release project" required /></label><p className="muted">Polling defaults to 300 seconds. Branches default to Develop, Stage, and Main.</p><Button type="submit" disabled={createMonitoredProject.isPending}>{createMonitoredProject.isPending ? "Registering…" : "Register project"}</Button></form> : <p className="muted">Add a GitLab integration first, then register a project here.</p>}{createMonitoredProject.isError && <p className="error">Project registration failed. Check the GitLab integration and permissions.</p>}</div>
+          <div className="panel"><span className="label">Observed events</span>{events.data?.length ? <div className="event-list">{events.data.map((event) => <div className="event-row" key={event.id}><div><strong>{event.event_type}</strong><span className="muted">{String(event.facts.ref ?? "unknown ref")} · {String(event.facts.sha ?? "unknown SHA")}</span></div><span className="pill pill-muted">{new Date(event.observed_at).toLocaleString()}</span></div>)}</div> : <p className="muted">No pipeline events observed yet.</p>}</div>
+        </section>
+        {projects.isError && <p className="error">Unable to load monitored projects for this organization.</p>}
+        <section className="project-list">{projects.data?.length ? projects.data.map((project) => <ProjectCard key={project.id} project={project} organizationId={selectedOrganizationId!} />) : <div className="empty-state"><div className="empty-icon">⌁</div><h2>No monitored projects</h2><p className="muted">Register a GitLab project above to start tracking pipeline state.</p></div>}</section>
       </section>
     </main>
   );
