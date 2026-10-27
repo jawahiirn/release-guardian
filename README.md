@@ -16,6 +16,14 @@ Release Guardian is a self-hosted release monitoring application. The MVP is adv
 
 The API and worker run `alembic upgrade head` before starting. PostgreSQL data is stored in the `postgres-data` named volume. Do not use these development credentials in a remotely exposed deployment.
 
+After the stack is running, create the first administrator from the API container:
+
+```sh
+docker compose exec api python -m apps.api.app.bootstrap --email admin@example.com
+```
+
+The command prompts securely for the password and is idempotent. It refuses to create another bootstrap user after the first user exists.
+
 ## Local checks
 
 Python tooling is defined in `pyproject.toml`; install the project and development extras with `uv sync --extra dev`, then run:

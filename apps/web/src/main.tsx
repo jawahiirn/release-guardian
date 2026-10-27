@@ -1,9 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import "./styles.css";
 import { Button } from "./components/ui/button";
+import { listOrganizations } from "./lib/api";
+
+const queryClient = new QueryClient();
 
 function App() {
+  const organizations = useQuery({ queryKey: ["organizations"], queryFn: listOrganizations, enabled: false });
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -21,7 +26,7 @@ function App() {
         <header className="topbar"><span>Overview</span><Button variant="ghost" type="button">Light / Dark</Button></header>
         <div className="page-heading"><div><p className="eyebrow">Release operations</p><h1>Keep every release moving.</h1><p className="muted">Monitor pipelines, understand failures, and notify the right people.</p></div><span className="status"><i /> Worker ready</span></div>
         <section className="cards" aria-label="Monitoring summary">
-          <article><span className="label">Monitored projects</span><strong>0</strong><span className="muted">Connect GitLab to begin</span></article>
+          <article><span className="label">Organizations</span><strong>{organizations.data?.length ?? 0}</strong><span className="muted">TanStack Query is ready for API state</span></article>
           <article><span className="label">Active incidents</span><strong>0</strong><span className="muted">No release blockers detected</span></article>
           <article><span className="label">Last poll</span><strong>—</strong><span className="muted">Waiting for configuration</span></article>
         </section>
@@ -31,4 +36,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
+createRoot(document.getElementById("root")!).render(<StrictMode><QueryClientProvider client={queryClient}><App /></QueryClientProvider></StrictMode>);

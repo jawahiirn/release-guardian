@@ -12,6 +12,8 @@
   "dependencies": {
     "@vitejs/plugin-react": "latest",
     "@tailwindcss/vite": "latest",
+    "@tanstack/react-query": "latest",
+    "axios": "latest",
     "vite": "latest",
     "tailwindcss": "latest",
     "typescript": "latest",
