@@ -69,6 +69,12 @@ The secret is never returned by the API or written to audit metadata. Every secr
 
 The frontend now includes a sign-in screen and an Integrations workspace. It supports organization selection/creation, provider metadata entry, write-only secret replacement, and local configuration validation. The validation action is deliberately network-free; it does not send Discord/Pushover messages or contact GitLab/OpenAI yet.
 
+## Milestone 3 monitoring slice
+
+The current monitoring slice adds GitLab project registration and a PostgreSQL-backed polling worker. Use Swagger to call `POST /api/v1/organizations/{organization_id}/projects`, omitting `polling_interval_seconds` to use the 300-second default, then use `POST /api/v1/projects/{project_id}/poll-now` to schedule an immediate read-only poll. Project state is available from `GET /api/v1/organizations/{organization_id}/projects`.
+
+The worker persists polling checkpoints and canonical failed-pipeline events with bounded failed-job evidence. Event uniqueness prevents duplicate events when the same pipeline state is observed again. Actual GitLab requests are read-only and require the GitLab hostname to be listed in `GITLAB_ALLOWED_HOSTS`; the default is `gitlab.com`. The first monitoring tests use injected fixtures and do not contact a real GitLab account.
+
 ## Current scope
 
-Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 now includes the first integration configuration UI and provider-shape validation; live provider connection tests, GitLab polling, AI analysis, and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.
+Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 includes integration configuration UI and provider-shape validation. Milestone 3 now includes the first GitLab project/polling/event slice; AI analysis and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.

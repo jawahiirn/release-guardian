@@ -25,6 +25,7 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
       ENCRYPTION_KEY_ID: ${ENCRYPTION_KEY_ID:-local-v1}
+      GITLAB_ALLOWED_HOSTS: ${GITLAB_ALLOWED_HOSTS:-gitlab.com}
     command: ["sh", "-c", "alembic upgrade head && uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000"]
     volumes:
       - .:/workspace
@@ -48,6 +49,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
       ENCRYPTION_KEY_ID: ${ENCRYPTION_KEY_ID:-local-v1}
+      GITLAB_ALLOWED_HOSTS: ${GITLAB_ALLOWED_HOSTS:-gitlab.com}
     command: ["python", "-m", "apps.worker.app.main"]
     volumes:
       - .:/workspace

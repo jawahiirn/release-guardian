@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import create_engine, text
 
+from apps.worker.app.poller import poll_due_projects
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg://release_guardian:change-me-in-local-env@localhost:5432/release_guardian",
@@ -37,6 +39,12 @@ def main() -> None:
     logger.info("worker started")
     while True:
         record_heartbeat()
+        try:
+            created = poll_due_projects(engine, WORKER_NAME)
+            if created:
+                logger.info("persisted %s new monitoring events", created)
+        except Exception:  # noqa: BLE001 - keep the heartbeat loop alive after a cycle failure
+            logger.exception("monitoring cycle failed")
         time.sleep(10)
 
 

@@ -44,6 +44,10 @@ app = FastAPI(
             "name": "integrations",
             "description": "Organization-scoped provider configuration and secret rotation.",
         },
+        {
+            "name": "projects",
+            "description": "Organization-scoped GitLab monitoring projects and polling state.",
+        },
     ],
 )
 app.add_middleware(
@@ -118,6 +122,41 @@ class IntegrationTestResponse(BaseModel):
     status: Literal["passed"]
     live_check: bool
     message: str
+
+
+class ProjectCreate(BaseModel):
+    gitlab_integration_id: UUID
+    external_project_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=160)
+    branch_config: dict[str, str] = Field(
+        default_factory=lambda: {
+            "development": "Develop",
+            "staging": "Stage",
+            "production": "Main",
+        }
+    )
+    polling_interval_seconds: int = Field(default=300, ge=30, le=86400)
+    enabled: bool = True
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    organization_id: str
+    gitlab_integration_id: str
+    external_project_id: str
+    name: str
+    branch_config: dict[str, str]
+    polling_interval_seconds: int
+    enabled: bool
+    last_poll_at: datetime | None = None
+    last_success_at: datetime | None = None
+    next_poll_at: datetime | None = None
+    last_error: str | None = None
+
+
+class PollNowResponse(BaseModel):
+    project_id: str
+    status: Literal["scheduled"]
 
 
 def require_org_admin(connection, organization_id: str, user_id: str) -> None:
@@ -628,3 +667,159 @@ def test_integration(
         "live_check": False,
         "message": "Configuration and encrypted secret validated; no provider request was made.",
     }
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/projects",
+    response_model=list[ProjectResponse],
+    tags=["projects"],
+    summary="List monitored GitLab projects for an organization",
+)
+def list_projects(
+    organization_id: str, session: Annotated[dict, Depends(current_session)]
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT p.id, p.organization_id, p.gitlab_integration_id,
+                           p.external_project_id, p.name,
+                           p.branch_config_json AS branch_config,
+                           p.polling_interval_seconds, p.enabled,
+                           c.last_poll_at, c.last_success_at, c.next_poll_at, c.last_error
+                    FROM projects p
+                    JOIN memberships m ON m.organization_id = p.organization_id
+                    JOIN poll_checkpoints c ON c.project_id = p.id
+                    WHERE p.organization_id = :organization_id AND m.user_id = :user_id
+                    ORDER BY p.name
+                    """
+                ),
+                {"organization_id": organization_id, "user_id": session["user_id"]},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+            "gitlab_integration_id": str(row["gitlab_integration_id"]),
+        }
+        for row in rows
+    ]
+
+
+@app.post(
+    "/api/v1/organizations/{organization_id}/projects",
+    response_model=ProjectResponse,
+    status_code=201,
+    tags=["projects"],
+    summary="Register a GitLab project for monitoring",
+)
+def create_project(
+    organization_id: str,
+    payload: ProjectCreate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> dict:
+    with engine.begin() as connection:
+        require_org_admin(connection, organization_id, str(session["user_id"]))
+        integration = connection.execute(
+            text(
+                "SELECT id FROM integrations "
+                "WHERE id = :integration_id AND organization_id = :organization_id "
+                "AND type = 'gitlab'"
+            ),
+            {
+                "integration_id": str(payload.gitlab_integration_id),
+                "organization_id": organization_id,
+            },
+        ).scalar_one_or_none()
+        if integration is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="GitLab integration not found",
+            )
+        project = (
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO projects (
+                        organization_id, gitlab_integration_id, external_project_id, name,
+                        branch_config_json, polling_interval_seconds, enabled
+                    ) VALUES (
+                        :organization_id, :gitlab_integration_id, :external_project_id, :name,
+                        CAST(:branch_config AS jsonb), :polling_interval_seconds, :enabled
+                    )
+                    RETURNING id, organization_id, gitlab_integration_id, external_project_id,
+                              name, branch_config_json AS branch_config,
+                              polling_interval_seconds, enabled
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "gitlab_integration_id": str(payload.gitlab_integration_id),
+                    "external_project_id": payload.external_project_id.strip(),
+                    "name": payload.name.strip(),
+                    "branch_config": json.dumps(payload.branch_config),
+                    "polling_interval_seconds": payload.polling_interval_seconds,
+                    "enabled": payload.enabled,
+                },
+            )
+            .mappings()
+            .one()
+        )
+        connection.execute(
+            text("INSERT INTO poll_checkpoints (project_id) VALUES (:project_id)"),
+            {"project_id": project["id"]},
+        )
+        audit(
+            connection,
+            organization_id,
+            str(session["user_id"]),
+            "project.created",
+            str(project["id"]),
+            {"external_project_id": payload.external_project_id.strip()},
+        )
+    return {
+        **dict(project),
+        "id": str(project["id"]),
+        "organization_id": str(project["organization_id"]),
+        "gitlab_integration_id": str(project["gitlab_integration_id"]),
+    }
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/poll-now",
+    response_model=PollNowResponse,
+    tags=["projects"],
+    summary="Schedule an immediate project poll",
+)
+def poll_now(project_id: UUID, session: Annotated[dict, Depends(require_csrf)]) -> dict[str, str]:
+    project_key = str(project_id)
+    with engine.begin() as connection:
+        organization_id = connection.execute(
+            text("SELECT organization_id FROM projects WHERE id = :project_id"),
+            {"project_id": project_key},
+        ).scalar_one_or_none()
+        if organization_id is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project not found")
+        require_org_admin(connection, str(organization_id), str(session["user_id"]))
+        connection.execute(
+            text(
+                "UPDATE poll_checkpoints SET next_poll_at = now(), last_error = NULL "
+                "WHERE project_id = :project_id"
+            ),
+            {"project_id": project_key},
+        )
+        audit(
+            connection,
+            str(organization_id),
+            str(session["user_id"]),
+            "project.poll_scheduled",
+            project_key,
+            {},
+        )
+    return {"project_id": project_key, "status": "scheduled"}
