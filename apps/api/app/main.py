@@ -1,12 +1,14 @@
+import json
 import os
 import re
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text
 
+from packages.crypto import SecretCipher
 from packages.security import hash_token, new_token, session_expiry, verify_password
 
 DATABASE_URL = os.getenv(
@@ -32,6 +34,10 @@ app = FastAPI(
         {
             "name": "organizations",
             "description": "Authenticated organization membership and creation.",
+        },
+        {
+            "name": "integrations",
+            "description": "Organization-scoped provider configuration and secret rotation.",
         },
     ],
 )
@@ -68,6 +74,79 @@ class OrganizationResponse(BaseModel):
     name: str
     slug: str
     role: str
+
+
+class IntegrationCreate(BaseModel):
+    type: Literal["gitlab", "openai", "discord", "pushover"]
+    display_name: str = Field(min_length=1, max_length=120)
+    public_config: dict[str, object] = Field(default_factory=dict)
+
+
+class IntegrationSecretUpdate(BaseModel):
+    secret: str = Field(min_length=1, max_length=10000)
+
+
+class IntegrationResponse(BaseModel):
+    id: str
+    organization_id: str
+    type: str
+    display_name: str
+    public_config: dict[str, object]
+    status: str
+    config_version: int
+    has_secret: bool
+    secret_updated_at: datetime | None = None
+
+
+def require_org_admin(connection, organization_id: str, user_id: str) -> None:
+    membership = connection.execute(
+        text(
+            "SELECT role FROM memberships "
+            "WHERE organization_id = :organization_id AND user_id = :user_id"
+        ),
+        {"organization_id": organization_id, "user_id": user_id},
+    ).scalar_one_or_none()
+    if membership not in {"owner", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="organization admin required"
+        )
+
+
+def require_org_member(connection, organization_id: str, user_id: str) -> None:
+    membership = connection.execute(
+        text(
+            "SELECT 1 FROM memberships "
+            "WHERE organization_id = :organization_id AND user_id = :user_id"
+        ),
+        {"organization_id": organization_id, "user_id": user_id},
+    ).scalar_one_or_none()
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="organization not found")
+
+
+def audit(
+    connection,
+    organization_id: str,
+    actor_user_id: str,
+    action: str,
+    resource: str,
+    metadata: dict,
+) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO audit_logs "
+            "(organization_id, actor_user_id, action, resource, metadata_json) "
+            "VALUES (:organization_id, :actor_user_id, :action, :resource, "
+            "CAST(:metadata AS jsonb))"
+        ),
+        {
+            "organization_id": organization_id,
+            "actor_user_id": actor_user_id,
+            "action": action,
+            "resource": resource,
+            "metadata": json.dumps(metadata),
+        },
+    )
 
 
 def current_session(
@@ -228,7 +307,7 @@ def list_organizations(session: Annotated[dict, Depends(current_session)]) -> li
             .mappings()
             .all()
         )
-    return [dict(row) for row in rows]
+    return [{**dict(row), "id": str(row["id"])} for row in rows]
 
 
 @app.post(
@@ -266,4 +345,187 @@ def create_organization(
             ),
             {"organization_id": organization["id"], "user_id": session["user_id"]},
         )
-    return {**dict(organization), "role": "owner"}
+    return {**dict(organization), "id": str(organization["id"]), "role": "owner"}
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/integrations",
+    response_model=list[IntegrationResponse],
+    tags=["integrations"],
+    summary="List organization integrations without secrets",
+)
+def list_integrations(
+    organization_id: str, session: Annotated[dict, Depends(current_session)]
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT i.id, i.organization_id, i.type, i.display_name,
+                           i.public_config_json AS public_config, i.status,
+                           i.config_version, s.integration_id IS NOT NULL AS has_secret,
+                           s.updated_at AS secret_updated_at
+                    FROM integrations i
+                    JOIN memberships m ON m.organization_id = i.organization_id
+                    LEFT JOIN integration_secrets s ON s.integration_id = i.id
+                    WHERE i.organization_id = :organization_id AND m.user_id = :user_id
+                    ORDER BY i.display_name
+                    """
+                ),
+                {"organization_id": organization_id, "user_id": session["user_id"]},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+        }
+        for row in rows
+    ]
+
+
+@app.post(
+    "/api/v1/organizations/{organization_id}/integrations",
+    response_model=IntegrationResponse,
+    status_code=201,
+    tags=["integrations"],
+    summary="Create an integration configuration",
+)
+def create_integration(
+    organization_id: str,
+    payload: IntegrationCreate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> dict:
+    with engine.begin() as connection:
+        require_org_admin(connection, organization_id, str(session["user_id"]))
+        integration = (
+            connection.execute(
+                text(
+                    "INSERT INTO integrations "
+                    "(organization_id, type, display_name, public_config_json) "
+                    "VALUES (:organization_id, :type, :display_name, "
+                    "CAST(:public_config AS jsonb)) "
+                    "RETURNING id, organization_id, type, display_name, "
+                    "public_config_json AS public_config, "
+                    "status, config_version"
+                ),
+                {
+                    "organization_id": organization_id,
+                    "type": payload.type,
+                    "display_name": payload.display_name.strip(),
+                    "public_config": json.dumps(payload.public_config),
+                },
+            )
+            .mappings()
+            .one()
+        )
+        audit(
+            connection,
+            organization_id,
+            str(session["user_id"]),
+            "integration.created",
+            str(integration["id"]),
+            {"type": payload.type, "display_name": payload.display_name.strip()},
+        )
+    return {
+        **dict(integration),
+        "id": str(integration["id"]),
+        "organization_id": str(integration["organization_id"]),
+        "has_secret": False,
+        "secret_updated_at": None,
+    }
+
+
+@app.put(
+    "/api/v1/integrations/{integration_id}/secret",
+    response_model=IntegrationResponse,
+    tags=["integrations"],
+    summary="Replace an integration secret without restarting services",
+)
+def rotate_integration_secret(
+    integration_id: str,
+    payload: IntegrationSecretUpdate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> dict:
+    cipher = SecretCipher()
+    encrypted_blob, nonce, key_id = cipher.encrypt(payload.secret)
+    with engine.begin() as connection:
+        integration = (
+            connection.execute(
+                text(
+                    "SELECT id, organization_id, type, display_name, "
+                    "public_config_json AS public_config, "
+                    "status, config_version FROM integrations WHERE id = :integration_id"
+                ),
+                {"integration_id": integration_id},
+            )
+            .mappings()
+            .first()
+        )
+        if integration is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="integration not found"
+            )
+        require_org_admin(connection, str(integration["organization_id"]), str(session["user_id"]))
+        connection.execute(
+            text(
+                """
+                INSERT INTO integration_secrets (integration_id, encrypted_blob, nonce, key_id)
+                VALUES (:integration_id, :encrypted_blob, :nonce, :key_id)
+                ON CONFLICT (integration_id) DO UPDATE SET
+                    encrypted_blob = EXCLUDED.encrypted_blob,
+                    nonce = EXCLUDED.nonce,
+                    key_id = EXCLUDED.key_id,
+                    updated_at = now()
+                """
+            ),
+            {
+                "integration_id": integration_id,
+                "encrypted_blob": encrypted_blob,
+                "nonce": nonce,
+                "key_id": key_id,
+            },
+        )
+        updated = (
+            connection.execute(
+                text(
+                    "UPDATE integrations SET config_version = config_version + 1, "
+                    "status = 'configured', updated_at = now() "
+                    "WHERE id = :integration_id RETURNING id, organization_id, type, display_name, "
+                    "public_config_json AS public_config, status, config_version"
+                ),
+                {"integration_id": integration_id},
+            )
+            .mappings()
+            .one()
+        )
+        audit(
+            connection,
+            str(integration["organization_id"]),
+            str(session["user_id"]),
+            "integration.secret_rotated",
+            integration_id,
+            {
+                "type": integration["type"],
+                "key_id": key_id,
+                "config_version": updated["config_version"],
+            },
+        )
+        secret_updated_at: datetime = connection.execute(
+            text(
+                "SELECT updated_at FROM integration_secrets WHERE integration_id = :integration_id"
+            ),
+            {"integration_id": integration_id},
+        ).scalar_one()
+    return {
+        **dict(updated),
+        "id": str(updated["id"]),
+        "organization_id": str(updated["organization_id"]),
+        "has_secret": True,
+        "secret_updated_at": secret_updated_at,
+    }

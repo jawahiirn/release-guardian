@@ -4,7 +4,7 @@ Release Guardian is a self-hosted release monitoring application. The MVP is adv
 
 ## Milestone 0 quick start
 
-1. Copy `.env.example` to `.env` and replace the local database password.
+1. Copy `.env.example` to `.env`, replace the local database password, and set a random 32-byte base64 `ENCRYPTION_MASTER_KEY`.
 2. Start the stack:
 
    ```sh
@@ -28,6 +28,8 @@ With the Compose database running, register a PostgreSQL server in pgAdmin using
 The database is published on localhost for development. The container still listens on port 5432 internally; the host port defaults to 5433 to avoid conflicts with an existing local PostgreSQL installation. Do not expose the database publicly in a production deployment.
 
 The API and worker run `alembic upgrade head` before starting. PostgreSQL data is stored in the `postgres-data` named volume. Do not use these development credentials in a remotely exposed deployment.
+
+Integration secrets are encrypted with `ENCRYPTION_MASTER_KEY` using AES-GCM. The key is loaded by both the API and worker at process start; provider credential replacement itself is live and does not require an API or worker restart. Keep the master key outside Git and back it up with the database. Changing the master key requires a separate re-encryption procedure and is not the same as rotating a provider credential.
 
 After the stack is running, create the first administrator from the API container:
 
@@ -55,6 +57,16 @@ npm run lint
 npm run test
 ```
 
+## Milestone 2 integration configuration
+
+The current slice adds organization-scoped integration metadata, encrypted write-only secrets, live credential replacement, and audit records. After bootstrapping an administrator and creating an organization, use Swagger at `/docs` to call:
+
+- `POST /api/v1/organizations/{organization_id}/integrations`
+- `GET /api/v1/organizations/{organization_id}/integrations`
+- `PUT /api/v1/integrations/{integration_id}/secret`
+
+The secret is never returned by the API or written to audit metadata. Every secret replacement creates a new nonce and increments `config_version`; worker operations will resolve the current version at operation time as provider adapters are added in later slices.
+
 ## Current scope
 
-Milestone 0 provides the runtime foundation only. Authentication, organizations, integrations, monitoring, AI analysis, and notifications are intentionally not implemented yet. See `spec.md` for the approved phased plan and security requirements.
+Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 currently provides the first integration configuration slice; provider connection tests, GitLab polling, AI analysis, and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.

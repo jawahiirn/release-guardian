@@ -434,8 +434,9 @@ Write-only secret update payloads MUST be excluded from response serialization a
 
 ### Milestone 2 — Live integration configuration
 
-- Implement encrypted secret store, integration CRUD, versioned live rotation, audit log, GitLab/Discord/Pushover configuration forms and connection tests.
-- **Done when:** GitLab and Discord credentials can be rotated under a running worker and the next operation resolves the new version without restart; rotation tests and audit records pass.
+- First vertical slice: implement organization-scoped integration metadata, encrypted write-only secret storage, audit records, and live rotation primitives for GitLab, OpenAI, Discord and Pushover types. The API must resolve current credential versions at operation time; no provider or worker restart is required for replacement.
+- Follow-up slices add provider-specific validation, connection tests, and the React configuration forms without delaying the first pipeline-failure workflow.
+- **Done when:** secret rotation works under a running worker, no plaintext secret appears in API responses/logs/audit metadata, unauthorized organizations cannot list or mutate integrations, and rotation/audit tests pass. Provider connection tests are not claimed until exercised against mocks or an explicitly authorized test environment.
 
 ### Milestone 3 — GitLab monitoring
 

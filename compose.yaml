@@ -22,6 +22,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-release_guardian}:${POSTGRES_PASSWORD:-change-me-in-local-env}@db:5432/${POSTGRES_DB:-release_guardian}
       APP_ENV: ${APP_ENV:-development}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
+      ENCRYPTION_KEY_ID: ${ENCRYPTION_KEY_ID:-local-v1}
     command: ["sh", "-c", "alembic upgrade head && uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000"]
     volumes:
       - .:/workspace
@@ -43,6 +45,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-release_guardian}:${POSTGRES_PASSWORD:-change-me-in-local-env}@db:5432/${POSTGRES_DB:-release_guardian}
       APP_ENV: ${APP_ENV:-development}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
+      ENCRYPTION_KEY_ID: ${ENCRYPTION_KEY_ID:-local-v1}
     command: ["python", "-m", "apps.worker.app.main"]
     volumes:
       - .:/workspace

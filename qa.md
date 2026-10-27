@@ -69,8 +69,12 @@ POSTGRES_USER=release_guardian
 POSTGRES_PASSWORD=use-a-local-secret
 APP_ENV=development
 VITE_API_BASE_URL=http://localhost:8000
+ENCRYPTION_MASTER_KEY=your-random-32-byte-base64-key
+ENCRYPTION_KEY_ID=local-v1
 ```
 
-The current application does not yet store provider credentials or an application encryption key. Those will be added in later milestones. Use strong, operator-managed values before exposing the application beyond localhost.
+The current application stores provider credentials only in encrypted write-only integration secret records. Use a strong, operator-managed encryption key before exposing the application beyond localhost.
 
 For pgAdmin, use host port `5433` by default. Release Guardian maps host port `5433` to PostgreSQL’s container port `5432` so it does not conflict with another PostgreSQL installation on Windows.
+
+The encryption master key is now required for integration secret operations. It is used inside the API and worker containers and must not be committed or pasted into issue reports. Provider credentials can be replaced while the services keep running; changing the master key is a separate operator migration.
