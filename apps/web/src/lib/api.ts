@@ -6,6 +6,14 @@ export const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === "string") return detail;
+  }
+  return fallback;
+}
+
 export type Organization = { id: string; name: string; slug: string; role: string };
 export type Integration = {
   id: string;

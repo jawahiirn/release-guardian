@@ -9,6 +9,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Resp
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from packages.crypto import SecretCipher
 from packages.integrations import IntegrationConfigError, validate_integration_config
@@ -742,6 +743,8 @@ def create_project(
 ) -> dict:
     with engine.begin() as connection:
         require_org_admin(connection, organization_id, str(session["user_id"]))
+        external_project_id = payload.external_project_id.strip()
+        project_name = payload.name.strip()
         integration = connection.execute(
             text(
                 "SELECT id FROM integrations "
@@ -758,35 +761,66 @@ def create_project(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="GitLab integration not found",
             )
-        project = (
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO projects (
-                        organization_id, gitlab_integration_id, external_project_id, name,
-                        branch_config_json, polling_interval_seconds, enabled
-                    ) VALUES (
-                        :organization_id, :gitlab_integration_id, :external_project_id, :name,
-                        CAST(:branch_config AS jsonb), :polling_interval_seconds, :enabled
-                    )
-                    RETURNING id, organization_id, gitlab_integration_id, external_project_id,
-                              name, branch_config_json AS branch_config,
-                              polling_interval_seconds, enabled
-                    """
-                ),
-                {
-                    "organization_id": organization_id,
-                    "gitlab_integration_id": str(payload.gitlab_integration_id),
-                    "external_project_id": payload.external_project_id.strip(),
-                    "name": payload.name.strip(),
-                    "branch_config": json.dumps(payload.branch_config),
-                    "polling_interval_seconds": payload.polling_interval_seconds,
-                    "enabled": payload.enabled,
-                },
+        existing = connection.execute(
+            text(
+                """
+                SELECT id, name FROM projects
+                WHERE organization_id = :organization_id
+                  AND gitlab_integration_id = :gitlab_integration_id
+                  AND external_project_id = :external_project_id
+                """
+            ),
+            {
+                "organization_id": organization_id,
+                "gitlab_integration_id": str(payload.gitlab_integration_id),
+                "external_project_id": external_project_id,
+            },
+        ).mappings().one_or_none()
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"GitLab project is already registered as '{existing['name']}'",
             )
-            .mappings()
-            .one()
-        )
+        try:
+            with connection.begin_nested():
+                project = (
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO projects (
+                                organization_id, gitlab_integration_id, external_project_id, name,
+                                branch_config_json, polling_interval_seconds, enabled
+                            ) VALUES (
+                                :organization_id, :gitlab_integration_id,
+                                :external_project_id, :name,
+                                CAST(:branch_config AS jsonb), :polling_interval_seconds, :enabled
+                            )
+                            RETURNING id, organization_id, gitlab_integration_id,
+                                      external_project_id,
+                                      name, branch_config_json AS branch_config,
+                                      polling_interval_seconds, enabled
+                            """
+                        ),
+                        {
+                            "organization_id": organization_id,
+                            "gitlab_integration_id": str(payload.gitlab_integration_id),
+                            "external_project_id": external_project_id,
+                            "name": project_name,
+                            "branch_config": json.dumps(payload.branch_config),
+                            "polling_interval_seconds": payload.polling_interval_seconds,
+                            "enabled": payload.enabled,
+                        },
+                    )
+                    .mappings()
+                    .one()
+                )
+        except IntegrityError as exc:
+            if "projects_gitlab_integration_id_external_project_id_key" in str(exc.orig):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="GitLab project is already registered for this integration",
+                ) from exc
+            raise
         connection.execute(
             text("INSERT INTO poll_checkpoints (project_id) VALUES (:project_id)"),
             {"project_id": project["id"]},
@@ -797,7 +831,7 @@ def create_project(
             str(session["user_id"]),
             "project.created",
             str(project["id"]),
-            {"external_project_id": payload.external_project_id.strip()},
+            {"external_project_id": external_project_id},
         )
     return {
         **dict(project),
