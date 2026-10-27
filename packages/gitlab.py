@@ -3,7 +3,7 @@
 import json
 import os
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
@@ -14,6 +14,10 @@ class GitLabClientError(RuntimeError):
 
 
 RequestFn = Callable[[Request, float], Any]
+
+
+def _urlopen(request: Request, timeout: float) -> Any:
+    return urlopen(request, timeout=timeout)
 
 
 def allowed_gitlab_hosts() -> set[str]:
@@ -46,7 +50,7 @@ class GitLabClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.timeout_seconds = timeout_seconds
-        self.request_fn: RequestFn = request_fn or cast(RequestFn, urlopen)
+        self.request_fn: RequestFn = request_fn or _urlopen
 
     def _get_json(self, path: str) -> Any:
         request = Request(
@@ -57,7 +61,9 @@ class GitLabClient:
         try:
             with self.request_fn(request, self.timeout_seconds) as response:
                 raw = response.read(2_000_000)
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        except HTTPError as exc:
+            raise GitLabClientError(f"GitLab request returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, OSError) as exc:
             raise GitLabClientError("GitLab request failed") from exc
         try:
             return json.loads(raw)
