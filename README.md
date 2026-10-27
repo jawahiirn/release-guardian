@@ -67,6 +67,8 @@ The current slice adds organization-scoped integration metadata, encrypted write
 
 The secret is never returned by the API or written to audit metadata. Every secret replacement creates a new nonce and increments `config_version`; worker operations will resolve the current version at operation time as provider adapters are added in later slices.
 
+The frontend now includes a sign-in screen and an Integrations workspace. It supports organization selection/creation, provider metadata entry, write-only secret replacement, and local configuration validation. The validation action is deliberately network-free; it does not send Discord/Pushover messages or contact GitLab/OpenAI yet.
+
 ## Current scope
 
-Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 currently provides the first integration configuration slice; provider connection tests, GitLab polling, AI analysis, and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.
+Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 now includes the first integration configuration UI and provider-shape validation; live provider connection tests, GitLab polling, AI analysis, and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.

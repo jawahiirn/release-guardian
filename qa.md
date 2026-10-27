@@ -78,3 +78,5 @@ The current application stores provider credentials only in encrypted write-only
 For pgAdmin, use host port `5433` by default. Release Guardian maps host port `5433` to PostgreSQL’s container port `5432` so it does not conflict with another PostgreSQL installation on Windows.
 
 The encryption master key is now required for integration secret operations. It is used inside the API and worker containers and must not be committed or pasted into issue reports. Provider credentials can be replaced while the services keep running; changing the master key is a separate operator migration.
+
+The frontend now has a sign-in flow and an Integrations workspace. After signing in, create or select an organization, add GitLab/OpenAI/Discord/Pushover metadata, replace the write-only secret, and use `Validate configuration`. That action validates the configured shape locally and intentionally makes no provider network request yet.

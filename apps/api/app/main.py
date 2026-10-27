@@ -5,10 +5,12 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text
 
 from packages.crypto import SecretCipher
+from packages.integrations import IntegrationConfigError, validate_integration_config
 from packages.security import hash_token, new_token, session_expiry, verify_password
 
 DATABASE_URL = os.getenv(
@@ -16,6 +18,8 @@ DATABASE_URL = os.getenv(
     "postgresql+psycopg://release_guardian:change-me-in-local-env@localhost:5432/release_guardian",
 )
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SESSION_COOKIE = "release_guardian_session"
+CSRF_HEADER = "X-CSRF-Token"
 
 app = FastAPI(
     title="Release Guardian API",
@@ -41,8 +45,19 @@ app = FastAPI(
         },
     ],
 )
-SESSION_COOKIE = "release_guardian_session"
-CSRF_HEADER = "X-CSRF-Token"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        origin.strip()
+        for origin in os.getenv(
+            "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+        ).split(",")
+        if origin.strip()
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Content-Type", CSRF_HEADER],
+)
 
 
 class LoginRequest(BaseModel):
@@ -96,6 +111,12 @@ class IntegrationResponse(BaseModel):
     config_version: int
     has_secret: bool
     secret_updated_at: datetime | None = None
+
+
+class IntegrationTestResponse(BaseModel):
+    status: Literal["passed"]
+    live_check: bool
+    message: str
 
 
 def require_org_admin(connection, organization_id: str, user_id: str) -> None:
@@ -401,6 +422,12 @@ def create_integration(
     payload: IntegrationCreate,
     session: Annotated[dict, Depends(require_csrf)],
 ) -> dict:
+    try:
+        validate_integration_config(payload.type, payload.public_config)
+    except IntegrationConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
     with engine.begin() as connection:
         require_org_admin(connection, organization_id, str(session["user_id"]))
         integration = (
@@ -472,6 +499,14 @@ def rotate_integration_secret(
                 status_code=status.HTTP_404_NOT_FOUND, detail="integration not found"
             )
         require_org_admin(connection, str(integration["organization_id"]), str(session["user_id"]))
+        try:
+            validate_integration_config(
+                str(integration["type"]), integration["public_config"], payload.secret
+            )
+        except IntegrationConfigError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
         connection.execute(
             text(
                 """
@@ -528,4 +563,65 @@ def rotate_integration_secret(
         "organization_id": str(updated["organization_id"]),
         "has_secret": True,
         "secret_updated_at": secret_updated_at,
+    }
+
+
+@app.post(
+    "/api/v1/integrations/{integration_id}/test",
+    response_model=IntegrationTestResponse,
+    tags=["integrations"],
+    summary="Validate a stored integration configuration without contacting its provider",
+)
+def test_integration(
+    integration_id: str, session: Annotated[dict, Depends(require_csrf)]
+) -> dict[str, object]:
+    cipher = SecretCipher()
+    with engine.connect() as connection:
+        integration = (
+            connection.execute(
+                text(
+                    "SELECT id, organization_id, type, public_config_json AS public_config "
+                    "FROM integrations WHERE id = :integration_id"
+                ),
+                {"integration_id": integration_id},
+            )
+            .mappings()
+            .first()
+        )
+        if integration is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="integration not found"
+            )
+        require_org_admin(connection, str(integration["organization_id"]), str(session["user_id"]))
+        secret_row = (
+            connection.execute(
+                text(
+                    "SELECT encrypted_blob, nonce, key_id FROM integration_secrets "
+                    "WHERE integration_id = :integration_id"
+                ),
+                {"integration_id": integration_id},
+            )
+            .mappings()
+            .first()
+        )
+        if secret_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="integration secret is not configured",
+            )
+        secret = cipher.decrypt(
+            secret_row["encrypted_blob"], secret_row["nonce"], secret_row["key_id"]
+        )
+        try:
+            validate_integration_config(
+                str(integration["type"]), integration["public_config"], secret
+            )
+        except IntegrationConfigError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            ) from exc
+    return {
+        "status": "passed",
+        "live_check": False,
+        "message": "Configuration and encrypted secret validated; no provider request was made.",
     }
