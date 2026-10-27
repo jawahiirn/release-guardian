@@ -50,6 +50,10 @@ export type ReleaseEvent = {
   occurred_at: string | null;
   observed_at: string;
   facts: Record<string, unknown>;
+  analysis_status: "complete" | "fallback" | null;
+  analysis_model: string | null;
+  analysis: Record<string, unknown> | null;
+  analysis_created_at: string | null;
 };
 
 let csrfToken: string | null = null;

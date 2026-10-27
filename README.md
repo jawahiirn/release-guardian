@@ -77,6 +77,10 @@ The worker persists polling checkpoints and canonical failed-pipeline events wit
 
 For GitLab fine-grained personal access tokens, `Project: Read` alone is not enough for polling. Grant the token `Pipeline: Read` for the project; this covers the pipeline and pipeline-job endpoints used by the worker. If your GitLab version exposes a separate job permission for the additional job metadata or trace endpoints added later, grant only its read permission. A legacy token with the `read_api` scope is an alternative for local testing.
 
+## Milestone 4 analysis slice
+
+New failed-pipeline events are analyzed by the worker. If an OpenAI integration is configured, the worker resolves its current encrypted secret at operation time and sends bounded, sanitized facts to the configured model (default `gpt-5-mini`) using a structured response schema. If no usable OpenAI integration is available, the event receives a factual `fallback` analysis instead of blocking polling. Analysis records are organization-scoped, versioned, deduplicated by event/evidence/model/prompt version, and visible in the observed-events panel. Discord/Pushover delivery remains a later milestone.
+
 ## Current scope
 
-Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 includes integration configuration UI and provider-shape validation. Milestone 3 now includes the GitLab Projects UI plus the first polling/event slice; AI analysis and notification delivery remain future milestones. See `spec.md` for the approved phased plan and security requirements.
+Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 includes integration configuration UI and provider-shape validation. Milestone 3 includes the GitLab Projects UI plus the first polling/event slice. Milestone 4 now adds grounded analysis and factual fallback records; notification delivery remains a future milestone. See `spec.md` for the approved phased plan and security requirements.

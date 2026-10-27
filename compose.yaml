@@ -26,6 +26,9 @@ services:
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
       ENCRYPTION_KEY_ID: ${ENCRYPTION_KEY_ID:-local-v1}
       GITLAB_ALLOWED_HOSTS: ${GITLAB_ALLOWED_HOSTS:-gitlab.com}
+      AI_DEFAULT_MODEL: ${AI_DEFAULT_MODEL:-gpt-5-mini}
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-1200}
+      AI_DAILY_ANALYSIS_LIMIT: ${AI_DAILY_ANALYSIS_LIMIT:-100}
     command: ["sh", "-c", "alembic upgrade head && uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000"]
     volumes:
       - .:/workspace
@@ -50,6 +53,9 @@ services:
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
       ENCRYPTION_KEY_ID: ${ENCRYPTION_KEY_ID:-local-v1}
       GITLAB_ALLOWED_HOSTS: ${GITLAB_ALLOWED_HOSTS:-gitlab.com}
+      AI_DEFAULT_MODEL: ${AI_DEFAULT_MODEL:-gpt-5-mini}
+      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-1200}
+      AI_DAILY_ANALYSIS_LIMIT: ${AI_DAILY_ANALYSIS_LIMIT:-100}
     command: ["python", "-m", "apps.worker.app.main"]
     volumes:
       - .:/workspace

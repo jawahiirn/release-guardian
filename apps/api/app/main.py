@@ -174,6 +174,23 @@ class EventResponse(BaseModel):
     occurred_at: datetime | None = None
     observed_at: datetime
     facts: dict[str, object]
+    analysis_status: str | None = None
+    analysis_model: str | None = None
+    analysis: dict[str, object] | None = None
+    analysis_created_at: datetime | None = None
+
+
+class AnalysisResponse(BaseModel):
+    id: str
+    organization_id: str
+    event_id: str
+    status: Literal["complete", "fallback"]
+    model: str
+    prompt_version: str
+    evidence_hash: str
+    analysis: dict[str, object]
+    error_code: str | None = None
+    created_at: datetime
 
 
 def require_org_admin(connection, organization_id: str, user_id: str) -> None:
@@ -894,8 +911,18 @@ def list_events(
                     """
                     SELECT id, organization_id, project_id, source, event_type,
                            meaningful_state_version, occurred_at, observed_at,
-                           facts_json AS facts
+                           facts_json AS facts,
+                           latest.id AS analysis_id, latest.status AS analysis_status,
+                           latest.model AS analysis_model, latest.analysis_json AS analysis,
+                           latest.created_at AS analysis_created_at
                     FROM events
+                    LEFT JOIN LATERAL (
+                        SELECT a.id, a.status, a.model, a.analysis_json, a.created_at
+                        FROM analyses a
+                        WHERE a.event_id = events.id
+                        ORDER BY a.created_at DESC
+                        LIMIT 1
+                    ) latest ON TRUE
                     WHERE organization_id = :organization_id
                     ORDER BY observed_at DESC
                     LIMIT :limit
@@ -912,6 +939,50 @@ def list_events(
             "id": str(row["id"]),
             "organization_id": str(row["organization_id"]),
             "project_id": str(row["project_id"]),
+        }
+        for row in rows
+    ]
+
+
+@app.get(
+    "/api/v1/events/{event_id}/analyses",
+    response_model=list[AnalysisResponse],
+    tags=["events"],
+    summary="List analyses for an observed event",
+)
+def list_event_analyses(
+    event_id: UUID, session: Annotated[dict, Depends(current_session)]
+) -> list[dict]:
+    with engine.connect() as connection:
+        organization_id = connection.execute(
+            text("SELECT organization_id FROM events WHERE id = :event_id"),
+            {"event_id": str(event_id)},
+        ).scalar_one_or_none()
+        if organization_id is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="event not found")
+        require_org_member(connection, str(organization_id), str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT id, organization_id, event_id, status, model, prompt_version,
+                           evidence_hash, analysis_json AS analysis, error_code, created_at
+                    FROM analyses
+                    WHERE event_id = :event_id AND organization_id = :organization_id
+                    ORDER BY created_at DESC
+                    """
+                ),
+                {"event_id": str(event_id), "organization_id": str(organization_id)},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+            "event_id": str(row["event_id"]),
         }
         for row in rows
     ]

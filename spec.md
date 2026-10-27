@@ -447,6 +447,7 @@ Write-only secret update payloads MUST be excluded from response serialization a
 ### Milestone 4 — AI analysis
 
 - Implement deterministic fact collection, sanitized evidence, OpenAI adapter, typed outputs, fallback behavior, budget limits.
+- Current vertical slice: persist versioned event analyses, redact and bound untrusted GitLab facts, use the runtime-selected OpenAI Responses adapter with `gpt-5-mini` as the default, enforce a daily analysis limit, and show the latest analysis or factual fallback in the events UI. Current credentials are resolved by the worker at operation time; no worker restart is needed after OpenAI secret rotation.
 - **Done when:** mocked model analysis is reproducible using runtime-selected `gpt-5-mini` by default, and an unavailable model still yields factual alerts. Future Codex-powered investigation remains an adapter boundary only; no generic agent orchestration is included.
 
 ### Milestone 5 — Notification delivery

@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from sqlalchemy import Engine, text
 
+from apps.worker.app.analyzer import analyze_new_event
 from packages.crypto import SecretCipher
 from packages.gitlab import GitLabClient, GitLabClientError
 from packages.monitoring import failed_pipeline_event, polling_delay_seconds
@@ -73,13 +74,19 @@ def poll_due_projects(
             token = cipher.decrypt(project["encrypted_blob"], project["nonce"], project["key_id"])
             base_url = str(project["integration_config"].get("base_url", "https://gitlab.com"))
             client = client_factory(base_url, token)
-            events_created += _poll_project(
+            new_event_ids = _poll_project(
                 engine,
                 project,
                 client,
                 observed_at=observed_at,
                 jitter_seconds=jitter_seconds,
             )
+            events_created += len(new_event_ids)
+            for event_id in new_event_ids:
+                try:
+                    analyze_new_event(engine, event_id)
+                except Exception:  # noqa: BLE001 - analysis must not fail GitLab polling
+                    logger.exception("event analysis failed for event %s", event_id)
         except Exception as exc:  # noqa: BLE001 - a project failure must not stop other projects
             _record_poll_failure(engine, project, observed_at, exc)
             logger.warning("GitLab poll failed for project %s", project["id"])
@@ -111,12 +118,12 @@ def _poll_project(
     *,
     observed_at: datetime,
     jitter_seconds: int | None,
-) -> int:
+) -> list[str]:
     project_data = {
         "branch_config": project["branch_config"],
     }
     pipelines = client.recent_pipelines(str(project["external_project_id"]))
-    events_created = 0
+    event_ids: list[str] = []
     with engine.begin() as connection:
         for pipeline in pipelines[:20]:
             pipeline_id = str(pipeline.get("id", ""))
@@ -159,7 +166,7 @@ def _poll_project(
                 },
             ).scalar_one_or_none()
             if inserted is not None:
-                events_created += 1
+                event_ids.append(str(inserted))
         interval = int(project["polling_interval_seconds"])
         jitter = jitter_seconds if jitter_seconds is not None else max(1, interval // 10)
         next_poll_at = observed_at + timedelta(seconds=polling_delay_seconds(interval, 0, jitter))
@@ -180,7 +187,7 @@ def _poll_project(
                 "project_id": project["id"],
             },
         )
-    return events_created
+    return event_ids
 
 
 def _record_poll_failure(
