@@ -3,6 +3,7 @@ import os
 import re
 from datetime import UTC, datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -475,12 +476,13 @@ def create_integration(
     summary="Replace an integration secret without restarting services",
 )
 def rotate_integration_secret(
-    integration_id: str,
+    integration_id: UUID,
     payload: IntegrationSecretUpdate,
     session: Annotated[dict, Depends(require_csrf)],
 ) -> dict:
     cipher = SecretCipher()
     encrypted_blob, nonce, key_id = cipher.encrypt(payload.secret)
+    integration_key = str(integration_id)
     with engine.begin() as connection:
         integration = (
             connection.execute(
@@ -489,7 +491,7 @@ def rotate_integration_secret(
                     "public_config_json AS public_config, "
                     "status, config_version FROM integrations WHERE id = :integration_id"
                 ),
-                {"integration_id": integration_id},
+                {"integration_id": integration_key},
             )
             .mappings()
             .first()
@@ -520,7 +522,7 @@ def rotate_integration_secret(
                 """
             ),
             {
-                "integration_id": integration_id,
+                "integration_id": integration_key,
                 "encrypted_blob": encrypted_blob,
                 "nonce": nonce,
                 "key_id": key_id,
@@ -534,7 +536,7 @@ def rotate_integration_secret(
                     "WHERE id = :integration_id RETURNING id, organization_id, type, display_name, "
                     "public_config_json AS public_config, status, config_version"
                 ),
-                {"integration_id": integration_id},
+                {"integration_id": integration_key},
             )
             .mappings()
             .one()
@@ -544,7 +546,7 @@ def rotate_integration_secret(
             str(integration["organization_id"]),
             str(session["user_id"]),
             "integration.secret_rotated",
-            integration_id,
+            integration_key,
             {
                 "type": integration["type"],
                 "key_id": key_id,
@@ -555,7 +557,7 @@ def rotate_integration_secret(
             text(
                 "SELECT updated_at FROM integration_secrets WHERE integration_id = :integration_id"
             ),
-            {"integration_id": integration_id},
+            {"integration_id": integration_key},
         ).scalar_one()
     return {
         **dict(updated),
@@ -573,9 +575,10 @@ def rotate_integration_secret(
     summary="Validate a stored integration configuration without contacting its provider",
 )
 def test_integration(
-    integration_id: str, session: Annotated[dict, Depends(require_csrf)]
+    integration_id: UUID, session: Annotated[dict, Depends(require_csrf)]
 ) -> dict[str, object]:
     cipher = SecretCipher()
+    integration_key = str(integration_id)
     with engine.connect() as connection:
         integration = (
             connection.execute(
@@ -583,7 +586,7 @@ def test_integration(
                     "SELECT id, organization_id, type, public_config_json AS public_config "
                     "FROM integrations WHERE id = :integration_id"
                 ),
-                {"integration_id": integration_id},
+                {"integration_id": integration_key},
             )
             .mappings()
             .first()
@@ -599,7 +602,7 @@ def test_integration(
                     "SELECT encrypted_blob, nonce, key_id FROM integration_secrets "
                     "WHERE integration_id = :integration_id"
                 ),
-                {"integration_id": integration_id},
+                {"integration_id": integration_key},
             )
             .mappings()
             .first()
