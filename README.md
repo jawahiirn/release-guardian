@@ -20,12 +20,12 @@ Release Guardian is a self-hosted release monitoring application. The MVP is adv
 With the Compose database running, register a PostgreSQL server in pgAdmin using:
 
 - Host: `localhost`
-- Port: `5432`
+- Port: `5433` by default (`POSTGRES_HOST_PORT` in `.env`)
 - Maintenance database: the `POSTGRES_DB` value from `.env`
 - Username: the `POSTGRES_USER` value from `.env`
 - Password: the `POSTGRES_PASSWORD` value from `.env`
 
-The database is published on localhost for development. Do not expose port 5432 publicly in a production deployment.
+The database is published on localhost for development. The container still listens on port 5432 internally; the host port defaults to 5433 to avoid conflicts with an existing local PostgreSQL installation. Do not expose the database publicly in a production deployment.
 
 The API and worker run `alembic upgrade head` before starting. PostgreSQL data is stored in the `postgres-data` named volume. Do not use these development credentials in a remotely exposed deployment.
 

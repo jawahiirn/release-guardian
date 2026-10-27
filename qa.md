@@ -72,3 +72,5 @@ VITE_API_BASE_URL=http://localhost:8000
 ```
 
 The current application does not yet store provider credentials or an application encryption key. Those will be added in later milestones. Use strong, operator-managed values before exposing the application beyond localhost.
+
+For pgAdmin, use host port `5433` by default. Release Guardian maps host port `5433` to PostgreSQL’s container port `5432` so it does not conflict with another PostgreSQL installation on Windows.
