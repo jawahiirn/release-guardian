@@ -8,10 +8,10 @@ from typing import Any, Protocol
 
 from sqlalchemy import Engine, text
 
-from apps.worker.app.analyzer import analyze_new_event
+from apps.worker.app.delivery import enqueue_event_notifications
 from packages.crypto import SecretCipher
 from packages.gitlab import GitLabClient, GitLabClientError
-from packages.monitoring import failed_pipeline_event, polling_delay_seconds
+from packages.monitoring import pipeline_event, polling_delay_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +82,6 @@ def poll_due_projects(
                 jitter_seconds=jitter_seconds,
             )
             events_created += len(new_event_ids)
-            for event_id in new_event_ids:
-                try:
-                    analyze_new_event(engine, event_id)
-                except Exception:  # noqa: BLE001 - analysis must not fail GitLab polling
-                    logger.exception("event analysis failed for event %s", event_id)
         except Exception as exc:  # noqa: BLE001 - a project failure must not stop other projects
             _record_poll_failure(engine, project, observed_at, exc)
             logger.warning("GitLab poll failed for project %s", project["id"])
@@ -132,7 +127,7 @@ def _poll_project(
                 if str(pipeline.get("status", "")).lower() == "failed"
                 else []
             )
-            event = failed_pipeline_event(project_data, pipeline, jobs, observed_at=observed_at)
+            event = pipeline_event(project_data, pipeline, jobs, observed_at=observed_at)
             if event is None:
                 continue
             inserted = connection.execute(
@@ -166,7 +161,11 @@ def _poll_project(
                 },
             ).scalar_one_or_none()
             if inserted is not None:
-                event_ids.append(str(inserted))
+                event_id = str(inserted)
+                enqueue_event_notifications(
+                    connection, event_id, str(project["organization_id"])
+                )
+                event_ids.append(event_id)
         interval = int(project["polling_interval_seconds"])
         jitter = jitter_seconds if jitter_seconds is not None else max(1, interval // 10)
         next_poll_at = observed_at + timedelta(seconds=polling_delay_seconds(interval, 0, jitter))

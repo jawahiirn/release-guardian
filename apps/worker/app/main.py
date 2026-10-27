@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 
 from sqlalchemy import create_engine, text
 
+from apps.worker.app.analyzer import analyze_pending_events
+from apps.worker.app.delivery import deliver_due_notifications
 from apps.worker.app.poller import poll_due_projects
 
 DATABASE_URL = os.getenv(
@@ -43,6 +45,12 @@ def main() -> None:
             created = poll_due_projects(engine, WORKER_NAME)
             if created:
                 logger.info("persisted %s new monitoring events", created)
+            delivered = deliver_due_notifications(engine, WORKER_NAME)
+            if delivered:
+                logger.info("delivered %s notifications", delivered)
+            analyzed = analyze_pending_events(engine, limit=1)
+            if analyzed:
+                logger.info("persisted %s event analyses", analyzed)
         except Exception:  # noqa: BLE001 - keep the heartbeat loop alive after a cycle failure
             logger.exception("monitoring cycle failed")
         time.sleep(10)

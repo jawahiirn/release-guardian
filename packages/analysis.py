@@ -84,16 +84,33 @@ def fallback_analysis(facts: dict[str, Any]) -> ReleaseAnalysis:
         for item in evidence
         if isinstance(item, dict) and item.get("name")
     ]
-    supporting = [f"Pipeline {pipeline_id} failed for ref {ref} at commit {sha}."]
+    pipeline_status = str(facts.get("status") or "failed")
+    is_success = pipeline_status == "success"
+    supporting = [
+        f"Pipeline {pipeline_id} {'succeeded' if is_success else 'failed'} "
+        f"for ref {ref} at commit {sha}."
+    ]
     if failed_jobs:
         supporting.append("Failed jobs: " + ", ".join(failed_jobs[:8]))
     return ReleaseAnalysis(
-        severity="warning",
-        summary=f"Pipeline {pipeline_id} failed for {ref}; the root cause requires investigation.",
+        severity="info" if is_success else "warning",
+        summary=(
+            f"Pipeline {pipeline_id} succeeded for {ref}."
+            if is_success
+            else f"Pipeline {pipeline_id} failed for {ref}; the root cause requires investigation."
+        ),
         likely_causes=[],
         supporting_facts=supporting,
-        unknowns=["No model analysis is available for this event."],
-        suggested_actions=["Open the GitLab pipeline and failed job links for investigation."],
+        unknowns=(
+            ["QA approval and release readiness are not available from this pipeline event."]
+            if is_success
+            else ["No model analysis is available for this event."]
+        ),
+        suggested_actions=(
+            ["Review the pipeline and release checks before treating this as release approval."]
+            if is_success
+            else ["Open the GitLab pipeline and failed job links for investigation."]
+        ),
         confidence="low",
     )
 

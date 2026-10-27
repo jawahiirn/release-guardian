@@ -8,7 +8,9 @@ import {
   createOrganization,
   Integration,
   createProject,
+  Delivery,
   listIntegrations,
+  listDeliveries,
   listEvents,
   listOrganizations,
   listProjects,
@@ -17,6 +19,7 @@ import {
   Project,
   apiErrorMessage,
   rotateIntegrationSecret,
+  sendDiscordTest,
   validateIntegration,
 } from "./lib/api";
 
@@ -58,14 +61,19 @@ function IntegrationCard({ integration, organizationId }: { integration: Integra
   const validate = useMutation({
     mutationFn: () => validateIntegration(integration.id),
   });
+  const sendTest = useMutation({
+    mutationFn: () => sendDiscordTest(integration.id),
+  });
 
   return (
     <article className="integration-card">
       <div className="integration-heading"><div><span className="label">{integration.type}</span><h3>{integration.display_name}</h3></div><span className={`pill ${integration.has_secret ? "pill-good" : "pill-muted"}`}>{integration.has_secret ? "Configured" : "Needs secret"}</span></div>
       <p className="muted">Configuration version {integration.config_version}. Secrets are write-only.</p>
-      <div className="button-row"><Button variant="ghost" type="button" onClick={() => validate.mutate()} disabled={!integration.has_secret || validate.isPending}>{validate.isPending ? "Checking…" : "Validate configuration"}</Button></div>
+      <div className="button-row"><Button variant="ghost" type="button" onClick={() => validate.mutate()} disabled={!integration.has_secret || validate.isPending}>{validate.isPending ? "Checking…" : "Validate configuration"}</Button>{integration.type === "discord" && <Button variant="ghost" type="button" onClick={() => sendTest.mutate()} disabled={!integration.has_secret || sendTest.isPending}>{sendTest.isPending ? "Sending…" : "Send test notification"}</Button>}</div>
       {validate.data && <p className="success">{validate.data.message}</p>}
       {validate.isError && <p className="error">Validation failed. Check the provider secret format.</p>}
+      {sendTest.data && <p className="success">{sendTest.data.message}</p>}
+      {sendTest.isError && <p className="error">{apiErrorMessage(sendTest.error, "Discord test notification failed.")}</p>}
       <form onSubmit={(event) => { event.preventDefault(); rotate.mutate(); }} className="secret-form">
         <input aria-label={`Replace ${integration.display_name} secret`} type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Replace provider secret" required />
         <Button type="submit" disabled={rotate.isPending}>{rotate.isPending ? "Saving…" : "Replace secret"}</Button>
@@ -115,6 +123,11 @@ function AuthenticatedApp() {
     queryFn: () => listEvents(selectedOrganizationId!),
     enabled: Boolean(selectedOrganizationId),
   });
+  const deliveries = useQuery({
+    queryKey: ["deliveries", selectedOrganizationId],
+    queryFn: () => listDeliveries(selectedOrganizationId!),
+    enabled: Boolean(selectedOrganizationId),
+  });
   const gitlabIntegrations = integrations.data?.filter((integration) => integration.type === "gitlab") ?? [];
   const [organizationName, setOrganizationName] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -162,6 +175,7 @@ function AuthenticatedApp() {
         <section className="workspace-grid">
           <div className="panel"><span className="label">Register project</span>{gitlabIntegrations.length ? <form onSubmit={(event) => { event.preventDefault(); createMonitoredProject.mutate(); }} className="form-stack"><label>GitLab integration<select value={gitlabIntegrationId || gitlabIntegrations[0].id} onChange={(event) => setGitlabIntegrationId(event.target.value)}>{gitlabIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name}</option>)}</select></label><label>Project ID or path<input value={externalProjectId} onChange={(event) => setExternalProjectId(event.target.value)} placeholder="group/project or 123456" required /></label><label>Display name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Staging release project" required /></label><p className="muted">Polling defaults to 300 seconds. Branches default to Develop, Stage, and Main.</p><Button type="submit" disabled={createMonitoredProject.isPending}>{createMonitoredProject.isPending ? "Registering…" : "Register project"}</Button></form> : <p className="muted">Add a GitLab integration first, then register a project here.</p>}{createMonitoredProject.isError && <p className="error">{apiErrorMessage(createMonitoredProject.error, "Project registration failed. Check the GitLab integration and permissions.")}</p>}</div>
           <div className="panel"><span className="label">Observed events</span>{events.data?.length ? <div className="event-list">{events.data.map((event) => <div className="event-row" key={event.id}><div><strong>{event.event_type}</strong><span className="muted">{String(event.facts.ref ?? "unknown ref")} · {String(event.facts.sha ?? "unknown SHA")}</span>{event.analysis && <span className="muted">{String(event.analysis.summary ?? "Analysis available")}</span>}</div><span className={`pill ${event.analysis_status === "complete" ? "pill-good" : "pill-muted"}`}>{event.analysis_status === "complete" ? "Analyzed" : event.analysis_status === "fallback" ? "Factual fallback" : "Observed"}</span></div>)}</div> : <p className="muted">No pipeline events observed yet.</p>}</div>
+          <div className="panel"><span className="label">Notification delivery</span>{deliveries.data?.length ? <div className="event-list">{deliveries.data.map((delivery: Delivery) => <div className="event-row" key={delivery.id}><div><strong>{delivery.kind}</strong><span className="muted">Attempts: {delivery.attempts}</span></div><span className={`pill ${delivery.status === "delivered" ? "pill-good" : delivery.status === "failed" ? "pill-muted" : "pill-muted"}`}>{delivery.status}</span></div>)}</div> : <p className="muted">No notification deliveries yet.</p>}</div>
         </section>
         {projects.isError && <p className="error">Unable to load monitored projects for this organization.</p>}
         <section className="project-list">{projects.data?.length ? projects.data.map((project) => <ProjectCard key={project.id} project={project} organizationId={selectedOrganizationId!} />) : <div className="empty-state"><div className="empty-icon">⌁</div><h2>No monitored projects</h2><p className="muted">Register a GitLab project above to start tracking pipeline state.</p></div>}</section>

@@ -19,7 +19,21 @@ def failed_pipeline_event(
 ) -> dict[str, Any] | None:
     """Convert a failed tracked pipeline into a bounded canonical event payload."""
 
-    if str(pipeline.get("status", "")).lower() != "failed":
+    event = pipeline_event(project, pipeline, jobs, observed_at=observed_at)
+    return event if event and event["event_type"] == "pipeline.failed" else None
+
+
+def pipeline_event(
+    project: dict[str, Any],
+    pipeline: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    *,
+    observed_at: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Convert a successful or failed tracked pipeline into a canonical event."""
+
+    pipeline_status = str(pipeline.get("status", "")).lower()
+    if pipeline_status not in {"failed", "success"}:
         return None
     branch_config = project.get("branch_config", DEFAULT_BRANCH_CONFIG)
     tracked_branches = {str(value) for value in branch_config.values() if value}
@@ -40,19 +54,19 @@ def failed_pipeline_event(
             "web_url": str(job.get("web_url", "")),
         }
         for job in jobs
-        if str(job.get("status", "")).lower() == "failed"
+        if pipeline_status == "failed" and str(job.get("status", "")).lower() == "failed"
     ][:20]
     occurred_at = _parse_timestamp(pipeline.get("updated_at") or pipeline.get("created_at"))
     return {
         "source": "gitlab",
         "source_event_key": f"pipeline:{pipeline_id}",
-        "event_type": "pipeline.failed",
-        "meaningful_state_version": f"{sha}:failed",
+        "event_type": f"pipeline.{pipeline_status}",
+        "meaningful_state_version": f"{sha}:{pipeline_status}",
         "occurred_at": occurred_at,
         "observed_at": observed_at or datetime.now(UTC),
         "facts": {
             "pipeline_id": pipeline_id,
-            "status": "failed",
+            "status": pipeline_status,
             "ref": ref,
             "sha": sha,
             "web_url": str(pipeline.get("web_url", "")),

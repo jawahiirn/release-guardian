@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from packages.monitoring import failed_pipeline_event, polling_delay_seconds
+from packages.monitoring import failed_pipeline_event, pipeline_event, polling_delay_seconds
 
 
 def test_failed_tracked_pipeline_becomes_bounded_event() -> None:
@@ -43,6 +43,17 @@ def test_untracked_or_non_failed_pipeline_is_ignored() -> None:
         )
         is None
     )
+
+
+def test_successful_tracked_pipeline_becomes_event() -> None:
+    event = pipeline_event(
+        {"branch_config": {"staging": "Stage"}},
+        {"id": 7, "status": "success", "ref": "Stage", "sha": "def456"},
+        [],
+    )
+    assert event is not None
+    assert event["event_type"] == "pipeline.success"
+    assert event["meaningful_state_version"] == "def456:success"
 
 
 def test_polling_backoff_is_bounded() -> None:

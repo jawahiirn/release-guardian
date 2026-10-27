@@ -453,6 +453,7 @@ Write-only secret update payloads MUST be excluded from response serialization a
 ### Milestone 5 — Notification delivery
 
 - Implement provider registry, destinations, rules, outbox, retry worker, Discord and Pushover adapters, delivery history UI.
+- Current vertical slice: add organization-scoped Discord destinations, atomically enqueue one logical notification per newly persisted tracked-branch pipeline event and destination, deliver through the worker with current credential resolution, retry/backoff, attempt history, and delivery-status API/UI. The default route is all enabled Discord destinations in the event's organization; a protected live Discord test action is available without a GitLab change. Configurable rules and Pushover remain follow-up slices.
 - **Done when:** the PostgreSQL transactional outbox creates one logical notification per event/destination, provides durable at-least-once delivery, and passes provider isolation, rotation, retry, and deduplication tests. Exactly-once external delivery is not guaranteed without provider-supported idempotency.
 
 ### Milestone 6 — Operational hardening and release

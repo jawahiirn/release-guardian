@@ -1,7 +1,9 @@
 """Worker-side event analysis with live OpenAI credential resolution."""
 
 import json
+import logging
 import os
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import Engine, text
@@ -16,6 +18,8 @@ from packages.analysis import (
 )
 from packages.crypto import SecretCipher
 from packages.openai_provider import OpenAIAnalysisProvider, OpenAIProviderError
+
+logger = logging.getLogger(__name__)
 
 
 def analyze_new_event(engine: Engine, event_id: str) -> bool:
@@ -89,6 +93,35 @@ def analyze_new_event(engine: Engine, event_id: str) -> bool:
             error_code = "analysis_unavailable"
     _persist_analysis(engine, event, result, current_hash, model, error_code=error_code)
     return True
+
+
+def analyze_pending_events(engine: Engine, *, limit: int = 1) -> int:
+    """Process a small bounded batch after polling and delivery remain responsive."""
+
+    with engine.connect() as connection:
+        raw_event_ids: Sequence[Any] = connection.execute(
+            text(
+                """
+                SELECT e.id
+                FROM events e
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM analyses a WHERE a.event_id = e.id
+                )
+                ORDER BY e.observed_at
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        ).scalars().all()
+        event_ids = [str(event_id) for event_id in raw_event_ids]
+    completed = 0
+    for event_id in event_ids:
+        try:
+            if analyze_new_event(engine, event_id):
+                completed += 1
+        except Exception:  # noqa: BLE001 - analysis must not stop polling or delivery
+            logger.exception("event analysis failed for event %s", event_id)
+    return completed
 
 
 def _analysis_exists(engine: Engine, event_id: str, evidence_hash_value: str, model: str) -> bool:

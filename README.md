@@ -84,3 +84,7 @@ New failed-pipeline events are analyzed by the worker. If an OpenAI integration 
 ## Current scope
 
 Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 includes integration configuration UI and provider-shape validation. Milestone 3 includes the GitLab Projects UI plus the first polling/event slice. Milestone 4 now adds grounded analysis and factual fallback records; notification delivery remains a future milestone. See `spec.md` for the approved phased plan and security requirements.
+
+## Milestone 5 notification slice
+
+The first notification slice routes newly observed tracked-branch pipeline events to configured Discord integrations through a PostgreSQL transactional outbox. Both successful and failed pipeline states are deduplicated by pipeline and commit state. The worker resolves the current Discord webhook at delivery time, records each attempt, retries transient failures with backoff, and exposes delivery history at `/api/v1/organizations/{organization_id}/deliveries`. Pushover and configurable routing rules remain follow-up slices. The Integrations workspace also provides an explicit Discord test-notification action that does not require a GitLab change.

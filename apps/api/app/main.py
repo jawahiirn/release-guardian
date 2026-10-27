@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 
 from packages.crypto import SecretCipher
 from packages.integrations import IntegrationConfigError, validate_integration_config
+from packages.notifications import DiscordWebhookProvider, NotificationDeliveryError
 from packages.security import hash_token, new_token, session_expiry, verify_password
 
 DATABASE_URL = os.getenv(
@@ -129,6 +130,12 @@ class IntegrationTestResponse(BaseModel):
     message: str
 
 
+class NotificationTestResponse(BaseModel):
+    status: Literal["sent"]
+    live_check: bool
+    message: str
+
+
 class ProjectCreate(BaseModel):
     gitlab_integration_id: UUID
     external_project_id: str = Field(min_length=1, max_length=200)
@@ -191,6 +198,23 @@ class AnalysisResponse(BaseModel):
     analysis: dict[str, object]
     error_code: str | None = None
     created_at: datetime
+
+
+class DeliveryResponse(BaseModel):
+    id: str
+    organization_id: str
+    event_id: str
+    destination_id: str
+    kind: str
+    status: Literal["pending", "in_progress", "delivered", "failed"]
+    attempts: int
+    next_attempt_at: datetime
+    last_attempt_at: datetime | None = None
+
+
+class DeliveryRetryResponse(BaseModel):
+    delivery_id: str
+    status: Literal["scheduled"]
 
 
 def require_org_admin(connection, organization_id: str, user_id: str) -> None:
@@ -525,6 +549,22 @@ def create_integration(
             .mappings()
             .one()
         )
+        if payload.type == "discord":
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO destinations (
+                        organization_id, integration_id, kind, display_name
+                    ) VALUES (:organization_id, :integration_id, 'discord', :display_name)
+                    ON CONFLICT (integration_id) DO NOTHING
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "integration_id": integration["id"],
+                    "display_name": payload.display_name.strip(),
+                },
+            )
         audit(
             connection,
             organization_id,
@@ -700,6 +740,85 @@ def test_integration(
         "status": "passed",
         "live_check": False,
         "message": "Configuration and encrypted secret validated; no provider request was made.",
+    }
+
+
+@app.post(
+    "/api/v1/integrations/{integration_id}/test-notification",
+    response_model=NotificationTestResponse,
+    tags=["integrations"],
+    summary="Send a live test notification for a Discord integration",
+)
+def test_notification(
+    integration_id: UUID, session: Annotated[dict, Depends(require_csrf)]
+) -> dict[str, object]:
+    integration_key = str(integration_id)
+    with engine.connect() as connection:
+        integration = (
+            connection.execute(
+                text(
+                    "SELECT id, organization_id, type FROM integrations "
+                    "WHERE id = :integration_id"
+                ),
+                {"integration_id": integration_key},
+            )
+            .mappings()
+            .first()
+        )
+        if integration is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="integration not found"
+            )
+        require_org_admin(connection, str(integration["organization_id"]), str(session["user_id"]))
+        if integration["type"] != "discord":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="live test notifications currently support Discord only",
+            )
+        secret_row = (
+            connection.execute(
+                text(
+                    "SELECT encrypted_blob, nonce, key_id FROM integration_secrets "
+                    "WHERE integration_id = :integration_id"
+                ),
+                {"integration_id": integration_key},
+            )
+            .mappings()
+            .first()
+        )
+    if secret_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="integration secret is not configured",
+        )
+    try:
+        webhook_url = SecretCipher().decrypt(
+            secret_row["encrypted_blob"], secret_row["nonce"], secret_row["key_id"]
+        )
+        http_status = DiscordWebhookProvider().send(
+            webhook_url,
+            "**Release Guardian test notification**\nDiscord delivery is configured correctly.",
+        )
+    except (NotificationDeliveryError, RuntimeError) as exc:
+        detail = (
+            str(exc)
+            if isinstance(exc, NotificationDeliveryError)
+            else "credential unavailable"
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail) from exc
+    with engine.begin() as connection:
+        audit(
+            connection,
+            str(integration["organization_id"]),
+            str(session["user_id"]),
+            "notification.test_sent",
+            integration_key,
+            {"type": "discord", "http_status": http_status},
+        )
+    return {
+        "status": "sent",
+        "live_check": True,
+        "message": "Discord test notification sent.",
     }
 
 
@@ -909,9 +1028,10 @@ def list_events(
             connection.execute(
                 text(
                     """
-                    SELECT id, organization_id, project_id, source, event_type,
-                           meaningful_state_version, occurred_at, observed_at,
-                           facts_json AS facts,
+                    SELECT events.id, events.organization_id, events.project_id,
+                           events.source, events.event_type,
+                           events.meaningful_state_version, events.occurred_at,
+                           events.observed_at, events.facts_json AS facts,
                            latest.id AS analysis_id, latest.status AS analysis_status,
                            latest.model AS analysis_model, latest.analysis_json AS analysis,
                            latest.created_at AS analysis_created_at
@@ -923,8 +1043,8 @@ def list_events(
                         ORDER BY a.created_at DESC
                         LIMIT 1
                     ) latest ON TRUE
-                    WHERE organization_id = :organization_id
-                    ORDER BY observed_at DESC
+                    WHERE events.organization_id = :organization_id
+                    ORDER BY events.observed_at DESC
                     LIMIT :limit
                     """
                 ),
@@ -986,3 +1106,79 @@ def list_event_analyses(
         }
         for row in rows
     ]
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/deliveries",
+    response_model=list[DeliveryResponse],
+    tags=["deliveries"],
+    summary="List notification delivery history for an organization",
+)
+def list_deliveries(
+    organization_id: str,
+    session: Annotated[dict, Depends(current_session)],
+    limit: int = Query(default=50, ge=1, le=100),
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT n.id, n.organization_id, n.event_id, n.destination_id,
+                           n.kind, n.status, n.attempts, n.next_attempt_at,
+                           max(a.attempted_at) AS last_attempt_at
+                    FROM notification_outbox n
+                    LEFT JOIN delivery_attempts a ON a.outbox_id = n.id
+                    WHERE n.organization_id = :organization_id
+                    GROUP BY n.id
+                    ORDER BY n.created_at DESC
+                    LIMIT :limit
+                    """
+                ),
+                {"organization_id": organization_id, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+            "event_id": str(row["event_id"]),
+            "destination_id": str(row["destination_id"]),
+        }
+        for row in rows
+    ]
+
+
+@app.post(
+    "/api/v1/deliveries/{delivery_id}/retry",
+    response_model=DeliveryRetryResponse,
+    tags=["deliveries"],
+    summary="Schedule a failed notification for retry",
+)
+def retry_delivery(
+    delivery_id: UUID, session: Annotated[dict, Depends(require_csrf)]
+) -> dict[str, str]:
+    with engine.begin() as connection:
+        organization_id = connection.execute(
+            text("SELECT organization_id FROM notification_outbox WHERE id = :delivery_id"),
+            {"delivery_id": str(delivery_id)},
+        ).scalar_one_or_none()
+        if organization_id is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="delivery not found")
+        require_org_admin(connection, str(organization_id), str(session["user_id"]))
+        connection.execute(
+            text(
+                """
+                UPDATE notification_outbox
+                SET status = 'pending', next_attempt_at = now(),
+                    lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+                WHERE id = :delivery_id AND status IN ('failed', 'pending')
+                """
+            ),
+            {"delivery_id": str(delivery_id)},
+        )
+    return {"delivery_id": str(delivery_id), "status": "scheduled"}

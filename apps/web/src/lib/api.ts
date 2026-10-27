@@ -55,6 +55,17 @@ export type ReleaseEvent = {
   analysis: Record<string, unknown> | null;
   analysis_created_at: string | null;
 };
+export type Delivery = {
+  id: string;
+  organization_id: string;
+  event_id: string;
+  destination_id: string;
+  kind: string;
+  status: "pending" | "in_progress" | "delivered" | "failed";
+  attempts: number;
+  next_attempt_at: string;
+  last_attempt_at: string | null;
+};
 
 let csrfToken: string | null = null;
 
@@ -121,6 +132,17 @@ export async function validateIntegration(integrationId: string): Promise<{ mess
   return response.data;
 }
 
+export async function sendDiscordTest(
+  integrationId: string,
+): Promise<{ message: string }> {
+  const response = await api.post<{ message: string }>(
+    `/api/v1/integrations/${integrationId}/test-notification`,
+    {},
+    { headers: csrfHeaders() },
+  );
+  return response.data;
+}
+
 export async function listProjects(organizationId: string): Promise<Project[]> {
   const response = await api.get<Project[]>(`/api/v1/organizations/${organizationId}/projects`);
   return response.data;
@@ -149,5 +171,12 @@ export async function pollProject(projectId: string): Promise<{ project_id: stri
 
 export async function listEvents(organizationId: string): Promise<ReleaseEvent[]> {
   const response = await api.get<ReleaseEvent[]>(`/api/v1/organizations/${organizationId}/events`);
+  return response.data;
+}
+
+export async function listDeliveries(organizationId: string): Promise<Delivery[]> {
+  const response = await api.get<Delivery[]>(
+    `/api/v1/organizations/${organizationId}/deliveries`,
+  );
   return response.data;
 }
