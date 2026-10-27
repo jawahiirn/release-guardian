@@ -13,6 +13,19 @@ Release Guardian is a self-hosted release monitoring application. The MVP is adv
 
 3. Open the frontend at <http://localhost:5173>.
 4. Check API liveness at <http://localhost:8000/health/live> and readiness at <http://localhost:8000/health/ready>.
+5. Open Swagger UI at <http://localhost:8000/docs>, ReDoc at <http://localhost:8000/redoc>, or the raw OpenAPI document at <http://localhost:8000/openapi.json>.
+
+## pgAdmin connection
+
+With the Compose database running, register a PostgreSQL server in pgAdmin using:
+
+- Host: `localhost`
+- Port: `5432`
+- Maintenance database: the `POSTGRES_DB` value from `.env`
+- Username: the `POSTGRES_USER` value from `.env`
+- Password: the `POSTGRES_PASSWORD` value from `.env`
+
+The database is published on localhost for development. Do not expose port 5432 publicly in a production deployment.
 
 The API and worker run `alembic upgrade head` before starting. PostgreSQL data is stored in the `postgres-data` named volume. Do not use these development credentials in a remotely exposed deployment.
 

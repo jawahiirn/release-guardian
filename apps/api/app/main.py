@@ -15,7 +15,26 @@ DATABASE_URL = os.getenv(
 )
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
-app = FastAPI(title="Release Guardian API", version="0.1.0")
+app = FastAPI(
+    title="Release Guardian API",
+    summary="Advisory release monitoring and notification API",
+    description=(
+        "The Release Guardian MVP observes release activity, preserves objective facts, "
+        "and provides advisory analysis. GitLab access is read-only during the MVP."
+    ),
+    version="0.1.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    openapi_tags=[
+        {"name": "health", "description": "Service liveness and readiness checks."},
+        {"name": "auth", "description": "Session-based authentication and identity."},
+        {
+            "name": "organizations",
+            "description": "Authenticated organization membership and creation.",
+        },
+    ],
+)
 SESSION_COOKIE = "release_guardian_session"
 CSRF_HEADER = "X-CSRF-Token"
 
@@ -27,6 +46,28 @@ class LoginRequest(BaseModel):
 
 class OrganizationRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+
+
+class HealthResponse(BaseModel):
+    status: str
+    checked_at: str | None = None
+
+
+class LoginResponse(BaseModel):
+    email: EmailStr
+    csrf_token: str
+
+
+class MeResponse(BaseModel):
+    id: str
+    email: EmailStr
+
+
+class OrganizationResponse(BaseModel):
+    id: str
+    name: str
+    slug: str
+    role: str
 
 
 def current_session(
@@ -70,12 +111,24 @@ def slugify(name: str) -> str:
     return slug or "organization"
 
 
-@app.get("/health/live")
+@app.get(
+    "/health/live",
+    response_model=HealthResponse,
+    response_model_exclude_none=True,
+    tags=["health"],
+    summary="Check API liveness",
+)
 def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ready")
+@app.get(
+    "/health/ready",
+    response_model=HealthResponse,
+    response_model_exclude_none=True,
+    tags=["health"],
+    summary="Check API readiness",
+)
 def ready() -> dict[str, str]:
     try:
         with engine.connect() as connection:
@@ -85,7 +138,12 @@ def ready() -> dict[str, str]:
     return {"status": "ready", "checked_at": datetime.now(UTC).isoformat()}
 
 
-@app.post("/api/v1/auth/login")
+@app.post(
+    "/api/v1/auth/login",
+    response_model=LoginResponse,
+    tags=["auth"],
+    summary="Create an authenticated session",
+)
 def login(payload: LoginRequest, response: Response) -> dict[str, str]:
     with engine.begin() as connection:
         user = (
@@ -130,7 +188,9 @@ def login(payload: LoginRequest, response: Response) -> dict[str, str]:
     return {"email": user["email"], "csrf_token": csrf_token}
 
 
-@app.post("/api/v1/auth/logout", status_code=204)
+@app.post(
+    "/api/v1/auth/logout", status_code=204, tags=["auth"], summary="Revoke the current session"
+)
 def logout(response: Response, session: Annotated[dict, Depends(require_csrf)]) -> None:
     with engine.begin() as connection:
         connection.execute(
@@ -139,12 +199,19 @@ def logout(response: Response, session: Annotated[dict, Depends(require_csrf)]) 
     response.delete_cookie(SESSION_COOKIE)
 
 
-@app.get("/api/v1/auth/me")
+@app.get(
+    "/api/v1/auth/me", response_model=MeResponse, tags=["auth"], summary="Get the current user"
+)
 def me(session: Annotated[dict, Depends(current_session)]) -> dict[str, str]:
     return {"id": str(session["user_id"]), "email": session["email"]}
 
 
-@app.get("/api/v1/organizations")
+@app.get(
+    "/api/v1/organizations",
+    response_model=list[OrganizationResponse],
+    tags=["organizations"],
+    summary="List organizations for the current user",
+)
 def list_organizations(session: Annotated[dict, Depends(current_session)]) -> list[dict]:
     with engine.connect() as connection:
         rows = (
@@ -164,7 +231,13 @@ def list_organizations(session: Annotated[dict, Depends(current_session)]) -> li
     return [dict(row) for row in rows]
 
 
-@app.post("/api/v1/organizations", status_code=201)
+@app.post(
+    "/api/v1/organizations",
+    response_model=OrganizationResponse,
+    status_code=201,
+    tags=["organizations"],
+    summary="Create an organization",
+)
 def create_organization(
     payload: OrganizationRequest, session: Annotated[dict, Depends(require_csrf)]
 ) -> dict:
