@@ -47,7 +47,7 @@ def poll_due_projects(
                     """
                     SELECT p.id, p.organization_id, p.external_project_id, p.name,
                            p.branch_config_json AS branch_config,
-                           p.polling_interval_seconds, c.retry_count,
+                           p.polling_interval_seconds, c.retry_count, c.last_poll_at,
                            i.public_config_json AS integration_config,
                            s.encrypted_blob, s.nonce, s.key_id
                     FROM projects p
@@ -116,6 +116,7 @@ def _poll_project(
 ) -> list[str]:
     project_data = {
         "branch_config": project["branch_config"],
+        "last_poll_at": project["last_poll_at"],
     }
     pipelines = client.recent_pipelines(str(project["external_project_id"]))
     event_ids: list[str] = []

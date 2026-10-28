@@ -45,7 +45,22 @@ def pipeline_event(
     branch_config = project.get("branch_config", DEFAULT_BRANCH_CONFIG)
     tracked_branches = {str(value).casefold() for value in branch_config.values() if value}
     ref = str(pipeline.get("ref", ""))
-    if ref.casefold() not in tracked_branches:
+    source = str(pipeline.get("source", "")).lower()
+    is_merge_request = source == "merge_request_event" or ref.startswith(
+        "refs/merge-requests/"
+    )
+    if is_merge_request:
+        last_poll_at = project.get("last_poll_at")
+        pipeline_updated_at = _parse_timestamp(
+            pipeline.get("updated_at") or pipeline.get("created_at")
+        )
+        if (
+            last_poll_at is not None
+            and pipeline_updated_at is not None
+            and pipeline_updated_at <= last_poll_at
+        ):
+            return None
+    elif ref.casefold() not in tracked_branches:
         return None
     pipeline_id = str(pipeline.get("id", ""))
     sha = str(pipeline.get("sha", ""))
@@ -81,6 +96,13 @@ def pipeline_event(
             "pipeline_id": pipeline_id,
             "status": pipeline_status,
             "ref": ref,
+            "merge_request_iid": (
+                ref.split("/")[2]
+                if is_merge_request
+                and len(ref.split("/")) > 3
+                and ref.split("/")[2].isdigit()
+                else None
+            ),
             "sha": sha,
             "web_url": str(pipeline.get("web_url", "")),
             "failure_evidence": evidence,

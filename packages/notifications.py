@@ -81,6 +81,9 @@ def format_pipeline_failure(
     facts = raw_facts if isinstance(raw_facts, dict) else {}
     pipeline_id = str(facts.get("pipeline_id", "unknown"))
     ref = str(facts.get("ref", "unknown"))
+    merge_request_iid = facts.get("merge_request_iid")
+    is_merge_request = isinstance(merge_request_iid, str) and merge_request_iid.isdigit()
+    display_ref = f"!{merge_request_iid}" if is_merge_request else ref
     pipeline_status = str(facts.get("status", "failed"))
     is_started = pipeline_status in {
         "created",
@@ -129,7 +132,11 @@ def format_pipeline_failure(
     return {
         "embeds": [
             {
-                "title": f"Pipeline {status_label} · {ref}",
+                "title": (
+                    f"Merge request pipeline {status_label} · {display_ref}"
+                    if is_merge_request
+                    else f"Pipeline {status_label} · {display_ref}"
+                ),
                 "description": f"**{project_name[:200]}**\n**Pipeline:** {pipeline_reference}",
                 "url": safe_url or None,
                 "color": (
