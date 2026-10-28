@@ -8,6 +8,13 @@ DEFAULT_BRANCH_CONFIG = {
     "staging": "Stage",
     "production": "Main",
 }
+ACTIVE_PIPELINE_STATUSES = {
+    "created",
+    "waiting_for_resource",
+    "preparing",
+    "pending",
+    "running",
+}
 
 
 def failed_pipeline_event(
@@ -30,15 +37,15 @@ def pipeline_event(
     *,
     observed_at: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """Convert a successful or failed tracked pipeline into a canonical event."""
+    """Convert a tracked pipeline state into a canonical event."""
 
     pipeline_status = str(pipeline.get("status", "")).lower()
-    if pipeline_status not in {"failed", "success"}:
+    if pipeline_status not in {"failed", "success", *ACTIVE_PIPELINE_STATUSES}:
         return None
     branch_config = project.get("branch_config", DEFAULT_BRANCH_CONFIG)
-    tracked_branches = {str(value) for value in branch_config.values() if value}
+    tracked_branches = {str(value).casefold() for value in branch_config.values() if value}
     ref = str(pipeline.get("ref", ""))
-    if ref not in tracked_branches:
+    if ref.casefold() not in tracked_branches:
         return None
     pipeline_id = str(pipeline.get("id", ""))
     sha = str(pipeline.get("sha", ""))
@@ -57,11 +64,17 @@ def pipeline_event(
         if pipeline_status == "failed" and str(job.get("status", "")).lower() == "failed"
     ][:20]
     occurred_at = _parse_timestamp(pipeline.get("updated_at") or pipeline.get("created_at"))
+    event_type = (
+        "pipeline.started"
+        if pipeline_status in ACTIVE_PIPELINE_STATUSES
+        else f"pipeline.{pipeline_status}"
+    )
+    meaningful_status = "started" if event_type == "pipeline.started" else pipeline_status
     return {
         "source": "gitlab",
         "source_event_key": f"pipeline:{pipeline_id}",
-        "event_type": f"pipeline.{pipeline_status}",
-        "meaningful_state_version": f"{sha}:{pipeline_status}",
+        "event_type": event_type,
+        "meaningful_state_version": f"{sha}:{meaningful_status}",
         "occurred_at": occurred_at,
         "observed_at": observed_at or datetime.now(UTC),
         "facts": {

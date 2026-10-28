@@ -81,12 +81,25 @@ def format_pipeline_failure(
     facts = raw_facts if isinstance(raw_facts, dict) else {}
     pipeline_id = str(facts.get("pipeline_id", "unknown"))
     ref = str(facts.get("ref", "unknown"))
-    sha = str(facts.get("sha", "unknown"))
     pipeline_status = str(facts.get("status", "failed"))
-    status_label = "succeeded" if pipeline_status == "success" else "failed"
+    is_started = pipeline_status in {
+        "created",
+        "waiting_for_resource",
+        "preparing",
+        "pending",
+        "running",
+    }
+    status_label = (
+        "started"
+        if is_started
+        else "succeeded" if pipeline_status == "success" else "failed"
+    )
     web_url = str(facts.get("web_url", ""))
     safe_url = web_url if web_url.startswith("https://") else ""
     project_name = str(event.get("project_name") or "GitLab project")
+    pipeline_reference = (
+        f"[#{pipeline_id}]({safe_url})" if safe_url else f"`#{pipeline_id}`"
+    )
     summary = str(analysis.get("summary", "")).strip() if analysis else ""
     analysis_label = "AI analysis" if analysis else "Factual fallback"
     evidence = facts.get("failure_evidence")
@@ -99,41 +112,33 @@ def format_pipeline_failure(
         if isinstance(evidence, list)
         else []
     )
-    fields: list[dict[str, Any]] = [
-        {"name": "Project", "value": project_name[:1024], "inline": True},
-        {"name": "Branch", "value": f"`{ref[:100]}`", "inline": True},
-        {
-            "name": "Commit",
-            "value": f"`{sha[:8]}`" if sha else "unknown",
-            "inline": True,
-        },
-        {
-            "name": "Pipeline",
-            "value": f"[#{pipeline_id}]({safe_url})" if safe_url else f"`{pipeline_id}`",
-            "inline": True,
-        },
-    ]
+    fields: list[dict[str, Any]] = []
     if failed_jobs:
         fields.append({"name": "Failed jobs", "value": ", ".join(failed_jobs[:8])[:1024]})
-    fields.append(
-        {
-            "name": analysis_label,
-            "value": (
-                summary or "Model analysis is unavailable; review the pipeline facts."
-            )[:1024],
-        }
-    )
+    if is_started:
+        fields.append({"name": "Current state", "value": pipeline_status})
+    else:
+        fields.append(
+            {
+                "name": analysis_label,
+                "value": (
+                    summary or "Model analysis is unavailable; review the pipeline facts."
+                )[:1024],
+            }
+        )
     return {
         "embeds": [
             {
                 "title": f"Pipeline {status_label} · {ref}",
-                "description": (
-                    "The tracked pipeline completed successfully."
-                    if pipeline_status == "success"
-                    else "The tracked pipeline requires investigation."
-                ),
+                "description": f"**{project_name[:200]}**\n**Pipeline:** {pipeline_reference}",
                 "url": safe_url or None,
-                "color": 0x2ECC71 if pipeline_status == "success" else 0xE74C3C,
+                "color": (
+                    0x3498DB
+                    if is_started
+                    else 0x2ECC71
+                    if pipeline_status == "success"
+                    else 0xE74C3C
+                ),
                 "fields": fields,
                 "footer": {"text": "Release Guardian"},
             }

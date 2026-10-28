@@ -73,7 +73,7 @@ services:
       - .:/workspace
       - web-node-modules:/workspace/apps/web/node_modules
     ports:
-      - "5173:5173"
+      - "5177:5173"
     depends_on:
       api:
         condition: service_healthy

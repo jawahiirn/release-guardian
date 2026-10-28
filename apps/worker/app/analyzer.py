@@ -107,6 +107,7 @@ def analyze_pending_events(engine: Engine, *, limit: int = 1) -> int:
                 WHERE NOT EXISTS (
                     SELECT 1 FROM analyses a WHERE a.event_id = e.id
                 )
+                  AND e.event_type <> 'pipeline.started'
                 ORDER BY e.observed_at
                 LIMIT :limit
                 """
