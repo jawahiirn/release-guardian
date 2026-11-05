@@ -1,0 +1,19 @@
+[Unit]
+Description=Release Guardian API
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=release-guardian
+WorkingDirectory=/opt/release-guardian
+EnvironmentFile=/etc/release-guardian/release-guardian.env
+ExecStart=/usr/local/bin/uv run uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

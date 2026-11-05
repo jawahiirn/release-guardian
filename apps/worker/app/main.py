@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 from apps.worker.app.analyzer import analyze_pending_events
 from apps.worker.app.delivery import deliver_due_notifications
 from apps.worker.app.poller import poll_due_projects
+from packages.observability import configure_json_logging
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -15,10 +16,7 @@ DATABASE_URL = os.getenv(
 )
 WORKER_NAME = os.getenv("WORKER_NAME", "release-guardian-worker")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+configure_json_logging("worker")
 logger = logging.getLogger(__name__)
 
 

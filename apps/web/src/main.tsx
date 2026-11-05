@@ -9,6 +9,7 @@ import {
   Integration,
   createProject,
   Delivery,
+  getAdminHealth,
   listIntegrations,
   listDeliveries,
   listEvents,
@@ -128,6 +129,11 @@ function AuthenticatedApp() {
     queryFn: () => listDeliveries(selectedOrganizationId!),
     enabled: Boolean(selectedOrganizationId),
   });
+  const health = useQuery({
+    queryKey: ["admin-health"],
+    queryFn: getAdminHealth,
+    refetchInterval: 15000,
+  });
   const gitlabIntegrations = integrations.data?.filter((integration) => integration.type === "gitlab") ?? [];
   const [organizationName, setOrganizationName] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -164,6 +170,12 @@ function AuthenticatedApp() {
       <section className="content">
         <header className="topbar"><span>Integrations</span><span className="status"><i /> Session active</span></header>
         <div className="page-heading"><div><p className="eyebrow">Instance configuration</p><h1>Connect your release tools.</h1><p className="muted">Store provider metadata and rotate credentials without restarting the services.</p></div></div>
+        <section className="health-panel panel">
+          <div className="section-heading"><div><span className="label">Operational health</span><h2>Runtime status</h2></div>{health.data && <span className={`pill ${health.data.status === "healthy" ? "pill-good" : "pill-muted"}`}>{health.data.status}</span>}</div>
+          {health.isLoading && <p className="muted">Checking API, worker, polling, and delivery health…</p>}
+          {health.isError && <p className="error">Operational health is unavailable. Check the API and worker services.</p>}
+          {health.data && <div className="health-grid"><div><span className="label">Worker</span><strong>{health.data.worker.status}</strong><span className="muted">{health.data.worker.age_seconds === null ? "No heartbeat yet" : `Last seen ${Math.round(health.data.worker.age_seconds)}s ago`}</span></div><div><span className="label">Polling</span><strong>{health.data.polling.enabled_projects} projects</strong><span className="muted">{health.data.polling.failed_projects ? `${health.data.polling.failed_projects} with errors` : "No project errors"}</span></div><div><span className="label">Notifications</span><strong>{health.data.notifications.pending} pending</strong><span className="muted">{health.data.notifications.failed ? `${health.data.notifications.failed} failed` : "No failed deliveries"}</span></div></div>}
+        </section>
         <section className="workspace-grid">
           <div className="panel"><span className="label">Organization</span>{organizations.isLoading ? <p className="muted">Loading organizations…</p> : organizations.data?.length ? <select value={selectedOrganizationId} onChange={(event) => setOrganizationId(event.target.value)}>{organizations.data.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} · {organization.role}</option>)}</select> : <p className="muted">Create your first organization to begin.</p>}<form onSubmit={(event) => { event.preventDefault(); createOrg.mutate(); }} className="inline-form"><input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder="New organization name" required /><Button type="submit" disabled={createOrg.isPending}>{createOrg.isPending ? "Creating…" : "Create"}</Button></form></div>
           <div className="panel"><span className="label">Add integration</span><form onSubmit={(event) => { event.preventDefault(); create.mutate(); }} className="form-stack"><label>Provider<select value={type} onChange={(event) => setType(event.target.value as Integration["type"])}><option value="gitlab">GitLab</option><option value="openai">OpenAI</option><option value="discord">Discord</option><option value="pushover">Pushover</option></select></label><label>Display name<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Staging GitLab" required /></label>{type === "gitlab" && <label>Base URL<input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required /></label>}{type === "openai" && <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} required /></label>}<Button type="submit" disabled={!selectedOrganizationId || create.isPending}>{create.isPending ? "Adding…" : "Add integration"}</Button></form></div>

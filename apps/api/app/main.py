@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from datetime import UTC, datetime
@@ -14,7 +15,11 @@ from sqlalchemy.exc import IntegrityError
 from packages.crypto import SecretCipher
 from packages.integrations import IntegrationConfigError, validate_integration_config
 from packages.notifications import DiscordWebhookProvider, NotificationDeliveryError
+from packages.observability import RequestContextMiddleware, configure_json_logging
 from packages.security import hash_token, new_token, session_expiry, verify_password
+
+configure_json_logging("api")
+logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -61,7 +66,7 @@ app.add_middleware(
     allow_origins=[
         origin.strip()
         for origin in os.getenv(
-            "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+            "CORS_ORIGINS", "http://localhost:5177,http://127.0.0.1:5177"
         ).split(",")
         if origin.strip()
     ],
@@ -69,6 +74,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["Content-Type", CSRF_HEADER],
 )
+app.add_middleware(RequestContextMiddleware)
 
 
 class LoginRequest(BaseModel):
@@ -83,6 +89,15 @@ class OrganizationRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     checked_at: str | None = None
+
+
+class HealthSnapshotResponse(BaseModel):
+    status: Literal["healthy", "degraded", "critical"]
+    checked_at: datetime
+    database: dict[str, object]
+    worker: dict[str, object]
+    polling: dict[str, object]
+    notifications: dict[str, object]
 
 
 class LoginResponse(BaseModel):
@@ -334,6 +349,105 @@ def ready() -> dict[str, str]:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ready", "checked_at": datetime.now(UTC).isoformat()}
+
+
+def health_snapshot() -> dict[str, object]:
+    checked_at = datetime.now(UTC)
+    stale_after = int(os.getenv("WORKER_HEARTBEAT_STALE_SECONDS", "45"))
+    with engine.connect() as connection:
+        worker = connection.execute(
+            text(
+                """
+                SELECT worker_name, last_seen_at,
+                       extract(epoch FROM (now() - last_seen_at)) AS age_seconds
+                FROM worker_heartbeats
+                ORDER BY last_seen_at DESC
+                LIMIT 1
+                """
+            )
+        ).mappings().one_or_none()
+        polling = connection.execute(
+            text(
+                """
+                SELECT count(*) FILTER (WHERE p.enabled) AS enabled_projects,
+                       count(*) FILTER (WHERE p.enabled AND c.last_error IS NOT NULL)
+                           AS failed_projects,
+                       max(c.last_poll_at) AS last_poll_at,
+                       min(c.next_poll_at) FILTER (WHERE p.enabled) AS next_poll_at
+                FROM projects p
+                JOIN poll_checkpoints c ON c.project_id = p.id
+                """
+            )
+        ).mappings().one()
+        notifications = connection.execute(
+            text(
+                """
+                SELECT count(*) FILTER (WHERE status = 'pending') AS pending,
+                       count(*) FILTER (WHERE status = 'in_progress') AS in_progress,
+                       count(*) FILTER (WHERE status = 'failed') AS failed,
+                       max(updated_at) FILTER (WHERE status = 'delivered') AS last_delivered_at
+                FROM notification_outbox
+                """
+            )
+        ).mappings().one()
+
+    worker_age = float(worker["age_seconds"]) if worker else None
+    worker_status = "healthy" if worker_age is not None and worker_age <= stale_after else "stale"
+    polling_status = "healthy" if int(polling["failed_projects"] or 0) == 0 else "degraded"
+    notification_status = (
+        "degraded" if int(notifications["failed"] or 0) > 0 else "healthy"
+    )
+    overall = "healthy"
+    if worker_status != "healthy":
+        overall = "critical"
+    elif polling_status != "healthy" or notification_status != "healthy":
+        overall = "degraded"
+    return {
+        "status": overall,
+        "checked_at": checked_at,
+        "database": {"status": "healthy"},
+        "worker": {
+            "status": worker_status,
+            "worker_name": worker["worker_name"] if worker else None,
+            "last_seen_at": worker["last_seen_at"] if worker else None,
+            "age_seconds": round(worker_age, 1) if worker_age is not None else None,
+            "stale_after_seconds": stale_after,
+        },
+        "polling": {
+            "status": polling_status,
+            "enabled_projects": int(polling["enabled_projects"] or 0),
+            "failed_projects": int(polling["failed_projects"] or 0),
+            "last_poll_at": polling["last_poll_at"],
+            "next_poll_at": polling["next_poll_at"],
+        },
+        "notifications": {
+            "status": notification_status,
+            "pending": int(notifications["pending"] or 0),
+            "in_progress": int(notifications["in_progress"] or 0),
+            "failed": int(notifications["failed"] or 0),
+            "last_delivered_at": notifications["last_delivered_at"],
+        },
+    }
+
+
+@app.get(
+    "/api/v1/admin/health",
+    response_model=HealthSnapshotResponse,
+    tags=["health"],
+    summary="Read authenticated operational health",
+)
+@app.get(
+    "/admin/health",
+    response_model=HealthSnapshotResponse,
+    include_in_schema=False,
+)
+def admin_health(session: Annotated[dict, Depends(current_session)]) -> dict[str, object]:
+    del session
+    try:
+        return health_snapshot()
+    except Exception as exc:
+        logger.exception("operational health snapshot failed")
+        raise HTTPException(status_code=503, detail="operational health unavailable") from exc
 
 
 @app.post(

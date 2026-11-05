@@ -1,5 +1,6 @@
 services:
   db:
+    restart: unless-stopped
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-release_guardian}
@@ -16,19 +17,21 @@ services:
       retries: 10
 
   api:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: infra/docker/python.Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-release_guardian}:${POSTGRES_PASSWORD:-change-me-in-local-env}@db:5432/${POSTGRES_DB:-release_guardian}
       APP_ENV: ${APP_ENV:-development}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5177,http://127.0.0.1:5177}
       ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:-}
       ENCRYPTION_KEY_ID: ${ENCRYPTION_KEY_ID:-local-v1}
       GITLAB_ALLOWED_HOSTS: ${GITLAB_ALLOWED_HOSTS:-gitlab.com}
       AI_DEFAULT_MODEL: ${AI_DEFAULT_MODEL:-gpt-5-mini}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-1200}
       AI_DAILY_ANALYSIS_LIMIT: ${AI_DAILY_ANALYSIS_LIMIT:-100}
+      WORKER_HEARTBEAT_STALE_SECONDS: ${WORKER_HEARTBEAT_STALE_SECONDS:-45}
     command: ["sh", "-c", "alembic upgrade head && uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000"]
     volumes:
       - .:/workspace
@@ -37,6 +40,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    stop_grace_period: 20s
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
       interval: 10s
@@ -44,6 +48,7 @@ services:
       retries: 10
 
   worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: infra/docker/python.Dockerfile
@@ -56,14 +61,17 @@ services:
       AI_DEFAULT_MODEL: ${AI_DEFAULT_MODEL:-gpt-5-mini}
       AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-1200}
       AI_DAILY_ANALYSIS_LIMIT: ${AI_DAILY_ANALYSIS_LIMIT:-100}
+      WORKER_HEARTBEAT_STALE_SECONDS: ${WORKER_HEARTBEAT_STALE_SECONDS:-45}
     command: ["python", "-m", "apps.worker.app.main"]
     volumes:
       - .:/workspace
     depends_on:
       api:
         condition: service_healthy
+    stop_grace_period: 20s
 
   web:
+    restart: unless-stopped
     image: node:22-alpine
     working_dir: /workspace/apps/web
     command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]

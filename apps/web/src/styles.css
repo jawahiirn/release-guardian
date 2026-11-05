@@ -31,6 +31,10 @@ h1, h2, p { margin-top: 0; } h1 { margin-bottom: 12px; font-size: clamp(30px, 4v
 .empty-icon { display: grid; place-items: center; width: 44px; height: 44px; margin: 0 auto 18px; border-radius: 12px; background: #172554; color: #60a5fa; }
 .workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .panel, .integration-card { padding: 20px; border: 1px solid #1e293b; border-radius: 12px; background: #111827; }
+.health-panel { margin-bottom: 16px; }
+.health-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.health-grid > div { display: grid; gap: 5px; }
+.health-grid strong { font-size: 18px; text-transform: capitalize; }
 .inline-form, .secret-form, .button-row, .integration-heading, .section-heading { display: flex; align-items: center; gap: 10px; }
 .inline-form, .secret-form { margin-top: 16px; } .secret-form input { flex: 1; }
 .integration-list { display: grid; gap: 14px; } .integration-heading { justify-content: space-between; align-items: start; } .integration-card h3 { margin: 7px 0 0; font-size: 18px; }
@@ -41,5 +45,6 @@ h1, h2, p { margin-top: 0; } h1 { margin-bottom: 12px; font-size: clamp(30px, 4v
 .pill { padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; } .pill-good { color: #86efac; background: #14532d; } .pill-muted { color: #cbd5e1; background: #334155; }
 .success { color: #86efac; font-size: 13px; } .error { color: #fca5a5; font-size: 13px; }
 .primary { border: 0; border-radius: 8px; padding: 11px 16px; color: white; background: #2563eb; cursor: pointer; } .primary:hover { background: #1d4ed8; }
-@media (max-width: 800px) { .sidebar { width: 72px; padding: 20px 10px; } .brand span:last-child, nav a { font-size: 0; } nav a::before { content: "•"; font-size: 18px; } .content { padding: 0 20px 40px; } .page-heading { align-items: start; flex-direction: column; } .cards, .workspace-grid { grid-template-columns: 1fr; } .auth-card { padding: 24px; } }
+@media (max-width: 800px) { .sidebar { width: 72px; padding: 20px 10px; } .brand span:last-child, nav a { font-size: 0; } nav a::before { content: "•"; font-size: 18px; } .content { padding: 0 20px 40px; } .page-heading { align-items: start; flex-direction: column; } .cards { grid-template-columns: 1fr; } .auth-card { padding: 24px; } }
+@media (max-width: 680px) { .workspace-grid, .health-grid { grid-template-columns: 1fr; } }
 @media (prefers-color-scheme: light) { :root, .shell { color: #0f172a; background: #f8fafc; } .sidebar, .cards article { background: white; border-color: #e2e8f0; } .topbar { border-color: #e2e8f0; } nav a { color: #64748b; } nav a:hover, nav a.active { color: #0f172a; background: #f1f5f9; } .empty-state { border-color: #cbd5e1; background: white; } }

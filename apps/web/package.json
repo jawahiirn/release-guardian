@@ -7,21 +7,23 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run --exclude tests/e2e/**",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
     "@tailwindcss/vite": "latest",
     "@tanstack/react-query": "latest",
+    "@vitejs/plugin-react": "latest",
     "axios": "latest",
-    "vite": "latest",
+    "react": "latest",
+    "react-dom": "latest",
     "tailwindcss": "latest",
     "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+    "vite": "latest"
   },
   "devDependencies": {
     "@eslint/js": "latest",
+    "@playwright/test": "^1.64.1",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@typescript-eslint/eslint-plugin": "latest",

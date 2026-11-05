@@ -1,0 +1,28 @@
+services:
+  db:
+    restart: unless-stopped
+    ports: []
+
+  api:
+    restart: unless-stopped
+    volumes: []
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+
+  worker:
+    restart: unless-stopped
+    volumes: []
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://127.0.0.1:8000}
+    restart: unless-stopped
+    image: releaseguardian-web:production
+    working_dir: /
+    command: []
+    volumes: []
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-5177}:80"

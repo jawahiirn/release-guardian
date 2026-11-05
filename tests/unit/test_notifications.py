@@ -58,7 +58,7 @@ def test_pipeline_failure_message_includes_only_safe_gitlab_link() -> None:
     assert any(field["name"] == "AI analysis" for field in embed["fields"])
 
 
-def test_success_message_uses_green_embed_and_short_commit() -> None:
+def test_success_message_uses_green_embed_and_pipeline_link() -> None:
     message = format_pipeline_failure(
         {
             "project_name": "Example project",
@@ -75,7 +75,11 @@ def test_success_message_uses_green_embed_and_short_commit() -> None:
     embed = message["embeds"][0]
     assert embed["title"] == "Pipeline succeeded · stage"
     assert embed["color"] == 0x2ECC71
-    assert any(field["value"] == "`abcdef12`" for field in embed["fields"])
+    assert embed["description"] == (
+        "**Example project**\n"
+        "**Pipeline:** [#42](https://gitlab.com/example/project/-/pipelines/42)"
+    )
+    assert "abcdef" not in str(embed)
 
 
 def test_discord_provider_surfaces_sanitized_provider_error() -> None:

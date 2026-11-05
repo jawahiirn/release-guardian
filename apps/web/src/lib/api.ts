@@ -67,6 +67,33 @@ export type Delivery = {
   last_attempt_at: string | null;
 };
 
+export type AdminHealth = {
+  status: "healthy" | "degraded" | "critical";
+  checked_at: string;
+  database: { status: string };
+  worker: {
+    status: string;
+    worker_name: string | null;
+    last_seen_at: string | null;
+    age_seconds: number | null;
+    stale_after_seconds: number;
+  };
+  polling: {
+    status: string;
+    enabled_projects: number;
+    failed_projects: number;
+    last_poll_at: string | null;
+    next_poll_at: string | null;
+  };
+  notifications: {
+    status: string;
+    pending: number;
+    in_progress: number;
+    failed: number;
+    last_delivered_at: string | null;
+  };
+};
+
 let csrfToken: string | null = null;
 
 function csrfHeaders() {
@@ -178,5 +205,10 @@ export async function listDeliveries(organizationId: string): Promise<Delivery[]
   const response = await api.get<Delivery[]>(
     `/api/v1/organizations/${organizationId}/deliveries`,
   );
+  return response.data;
+}
+
+export async function getAdminHealth(): Promise<AdminHealth> {
+  const response = await api.get<AdminHealth>("/api/v1/admin/health");
   return response.data;
 }
