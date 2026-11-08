@@ -78,7 +78,8 @@ def _claim_notification(engine: Engine, worker_name: str, now: datetime) -> dict
                     """
                     WITH candidate AS (
                         SELECT id FROM notification_outbox
-                        WHERE status IN ('pending', 'failed')
+                        WHERE (status IN ('pending', 'failed')
+                               OR (status = 'in_progress' AND lease_expires_at < :now))
                           AND next_attempt_at <= :now
                           AND (lease_expires_at IS NULL OR lease_expires_at < :now)
                         ORDER BY next_attempt_at, created_at

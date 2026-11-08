@@ -35,20 +35,26 @@ def record_heartbeat() -> None:
         )
 
 
+def run_cycle() -> None:
+    """Run one processing cycle in dependency order."""
+
+    created = poll_due_projects(engine, WORKER_NAME)
+    if created:
+        logger.info("persisted %s new monitoring events", created)
+    analyzed = analyze_pending_events(engine, limit=20)
+    if analyzed:
+        logger.info("persisted %s event analyses", analyzed)
+    delivered = deliver_due_notifications(engine, WORKER_NAME)
+    if delivered:
+        logger.info("delivered %s notifications", delivered)
+
+
 def main() -> None:
     logger.info("worker started")
     while True:
         record_heartbeat()
         try:
-            created = poll_due_projects(engine, WORKER_NAME)
-            if created:
-                logger.info("persisted %s new monitoring events", created)
-            delivered = deliver_due_notifications(engine, WORKER_NAME)
-            if delivered:
-                logger.info("delivered %s notifications", delivered)
-            analyzed = analyze_pending_events(engine, limit=1)
-            if analyzed:
-                logger.info("persisted %s event analyses", analyzed)
+            run_cycle()
         except Exception:  # noqa: BLE001 - keep the heartbeat loop alive after a cycle failure
             logger.exception("monitoring cycle failed")
         time.sleep(10)
