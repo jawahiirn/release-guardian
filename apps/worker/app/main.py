@@ -41,7 +41,7 @@ def run_cycle() -> None:
     created = poll_due_projects(engine, WORKER_NAME)
     if created:
         logger.info("persisted %s new monitoring events", created)
-    analyzed = analyze_pending_events(engine, limit=20)
+    analyzed = analyze_pending_events(engine, limit=20, worker_name=WORKER_NAME)
     if analyzed:
         logger.info("persisted %s event analyses", analyzed)
     delivered = deliver_due_notifications(engine, WORKER_NAME)

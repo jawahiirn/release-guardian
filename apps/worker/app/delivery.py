@@ -103,12 +103,21 @@ def _claim_notification(engine: Engine, worker_name: str, now: datetime) -> dict
                 text(
                     """
                     WITH candidate AS (
-                        SELECT id FROM notification_outbox
-                        WHERE (status IN ('pending', 'failed')
-                               OR (status = 'in_progress' AND lease_expires_at < :now))
-                          AND next_attempt_at <= :now
-                          AND (lease_expires_at IS NULL OR lease_expires_at < :now)
-                        ORDER BY next_attempt_at, created_at
+                        SELECT n.id FROM notification_outbox n
+                        JOIN events e ON e.id = n.event_id
+                        WHERE (n.status IN ('pending', 'failed')
+                               OR (n.status = 'in_progress' AND n.lease_expires_at < :now))
+                          AND n.next_attempt_at <= :now
+                          AND (n.lease_expires_at IS NULL OR n.lease_expires_at < :now)
+                          AND (
+                            e.event_type = 'pipeline.started'
+                            OR EXISTS (SELECT 1 FROM analyses a WHERE a.event_id = e.id)
+                            OR EXISTS (
+                                SELECT 1 FROM jobs j
+                                WHERE j.event_id = e.id AND j.state = 'dead'
+                            )
+                          )
+                        ORDER BY n.next_attempt_at, n.created_at
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
                     )

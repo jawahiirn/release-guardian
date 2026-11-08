@@ -104,6 +104,8 @@ For GitLab fine-grained personal access tokens, `Project: Read` alone is not eno
 
 New failed-pipeline events are analyzed by the worker. If an OpenAI integration is configured, the worker resolves its current encrypted secret at operation time and sends bounded, sanitized facts to the configured model (default `gpt-5-mini`) using a structured response schema. If no usable OpenAI integration is available, the event receives a factual `fallback` analysis instead of blocking polling. Analysis records are organization-scoped, versioned, deduplicated by event/evidence/model/prompt version, and visible in the observed-events panel. Discord/Pushover delivery remains a later milestone.
 
+Analysis work is persisted as PostgreSQL jobs with queued, leased, retryable-failed, succeeded, and dead states. Expired leases are reclaimed after worker crashes. Notification delivery waits for the analysis/fallback job to finish, while terminal analysis failures still allow an objective factual alert.
+
 ## Current scope
 
 Milestones 0 and 1 provide the runtime, identity, and organization foundation. Milestone 2 includes integration configuration UI and provider-shape validation. Milestone 3 includes the GitLab Projects UI plus the first polling/event slice. Milestone 4 now adds grounded analysis and factual fallback records. Milestone 5 adds Discord notification delivery through a transactional outbox. See `spec.md` for the approved phased plan and security requirements.

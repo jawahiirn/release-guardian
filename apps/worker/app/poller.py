@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from sqlalchemy import Engine, text
 
+from apps.worker.app.analyzer import enqueue_analysis_job
 from apps.worker.app.delivery import enqueue_event_notifications
 from packages.crypto import SecretCipher
 from packages.gitlab import GitLabClient, GitLabClientError
@@ -210,6 +211,10 @@ def _poll_project(
             ).scalar_one_or_none()
             if inserted is not None:
                 event_id = str(inserted)
+                if event["event_type"] != "pipeline.started":
+                    enqueue_analysis_job(
+                        connection, event_id, str(project["organization_id"])
+                    )
                 enqueue_event_notifications(
                     connection, event_id, str(project["organization_id"])
                 )

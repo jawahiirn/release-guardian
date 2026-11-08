@@ -12,7 +12,7 @@ def test_worker_cycle_analyzes_before_delivery(monkeypatch) -> None:
     monkeypatch.setattr(
         main,
         "analyze_pending_events",
-        lambda engine, limit: calls.append(("analyze", limit)) or 1,
+        lambda engine, limit, worker_name: calls.append(("analyze", limit)) or 1,
     )
     monkeypatch.setattr(
         main,

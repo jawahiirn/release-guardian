@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
 from apps.api.app import main as api_main
+from apps.worker.app.analyzer import _claim_analysis_job, enqueue_analysis_job
 from apps.worker.app.delivery import _claim_notification, enqueue_event_notifications
 from packages.security import hash_password
 
@@ -110,6 +111,11 @@ def test_outbox_is_deduplicated_and_expired_delivery_is_reclaimed(
         ).scalar_one()
         assert enqueue_event_notifications(connection, str(event_id), organization_id) == 1
         assert enqueue_event_notifications(connection, str(event_id), organization_id) == 0
+        enqueue_analysis_job(connection, str(event_id), organization_id)
+        connection.execute(
+            text("UPDATE jobs SET state = 'dead' WHERE event_id = :event_id"),
+            {"event_id": event_id},
+        )
         connection.execute(
             text(
                 "UPDATE notification_outbox SET status = 'in_progress', "
@@ -123,6 +129,55 @@ def test_outbox_is_deduplicated_and_expired_delivery_is_reclaimed(
         )
 
     claimed = _claim_notification(integration_engine, "integration-worker", datetime.now(UTC))
+
+    assert claimed is not None
+    assert str(claimed["event_id"]) == str(event_id)
+    assert claimed["attempts"] == 1
+
+
+def test_expired_analysis_job_lease_is_reclaimed(integration_engine: Engine) -> None:
+    _, organization_id = _seed_tenant(
+        integration_engine, f"analysis-job-{uuid4().hex}@example.com"
+    )
+    with integration_engine.begin() as connection:
+        integration_id = connection.execute(
+            text(
+                "INSERT INTO integrations (organization_id, type, display_name) "
+                "VALUES (:organization_id, 'gitlab', 'GitLab') RETURNING id"
+            ),
+            {"organization_id": organization_id},
+        ).scalar_one()
+        project_id = connection.execute(
+            text(
+                "INSERT INTO projects (organization_id, gitlab_integration_id, "
+                "external_project_id, name) VALUES "
+                "(:organization_id, :integration_id, 'group/analysis', 'Analysis') RETURNING id"
+            ),
+            {"organization_id": organization_id, "integration_id": integration_id},
+        ).scalar_one()
+        event_id = connection.execute(
+            text(
+                "INSERT INTO events (organization_id, project_id, source, source_event_key, "
+                "event_type, meaningful_state_version) VALUES "
+                "(:organization_id, :project_id, 'gitlab', 'pipeline:analysis', "
+                "'pipeline.failed', 'sha:failed') RETURNING id"
+            ),
+            {"organization_id": organization_id, "project_id": project_id},
+        ).scalar_one()
+        enqueue_analysis_job(connection, str(event_id), organization_id)
+        connection.execute(
+            text(
+                "UPDATE jobs SET state = 'leased', lease_owner = 'crashed-worker', "
+                "lease_expires_at = :expired, next_attempt_at = :expired "
+                "WHERE event_id = :event_id"
+            ),
+            {
+                "expired": datetime.now(UTC) - timedelta(minutes=5),
+                "event_id": event_id,
+            },
+        )
+
+    claimed = _claim_analysis_job(integration_engine, "replacement-worker", datetime.now(UTC))
 
     assert claimed is not None
     assert str(claimed["event_id"]) == str(event_id)

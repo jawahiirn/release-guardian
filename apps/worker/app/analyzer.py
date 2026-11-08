@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Engine, text
@@ -20,6 +20,20 @@ from packages.crypto import SecretCipher
 from packages.openai_provider import OpenAIAnalysisProvider, OpenAIProviderError
 
 logger = logging.getLogger(__name__)
+MAX_JOB_ATTEMPTS = 5
+
+
+def enqueue_analysis_job(connection: Any, event_id: str, organization_id: str) -> None:
+    connection.execute(
+        text(
+            """
+            INSERT INTO jobs (organization_id, event_id, kind)
+            VALUES (:organization_id, :event_id, 'analyze_event')
+            ON CONFLICT (kind, event_id) DO NOTHING
+            """
+        ),
+        {"organization_id": organization_id, "event_id": event_id},
+    )
 
 
 def analyze_new_event(engine: Engine, event_id: str) -> bool:
@@ -95,34 +109,103 @@ def analyze_new_event(engine: Engine, event_id: str) -> bool:
     return True
 
 
-def analyze_pending_events(engine: Engine, *, limit: int = 1) -> int:
-    """Process a small bounded batch after polling and delivery remain responsive."""
+def analyze_pending_events(
+    engine: Engine, *, limit: int = 1, worker_name: str = "release-guardian-worker"
+) -> int:
+    """Claim durable jobs and persist analysis or factual fallback results."""
 
-    with engine.connect() as connection:
-        raw_event_ids: Sequence[Any] = connection.execute(
+    completed = 0
+    for _ in range(limit):
+        job = _claim_analysis_job(engine, worker_name, datetime.now(UTC))
+        if job is None:
+            break
+        try:
+            analyze_new_event(engine, str(job["event_id"]))
+            _complete_analysis_job(engine, str(job["id"]))
+            completed += 1
+        except Exception as exc:  # noqa: BLE001 - one job must not stop other work
+            logger.exception("event analysis failed for event %s", job["event_id"])
+            _fail_analysis_job(engine, job, exc, datetime.now(UTC))
+    return completed
+
+
+def _claim_analysis_job(
+    engine: Engine, worker_name: str, now: datetime
+) -> dict[str, Any] | None:
+    with engine.begin() as connection:
+        row = (
+            connection.execute(
+                text(
+                    """
+                    WITH candidate AS (
+                        SELECT id FROM jobs
+                        WHERE kind = 'analyze_event'
+                          AND (
+                            state IN ('queued', 'retryable_failed')
+                            OR (state = 'leased' AND lease_expires_at < :now)
+                          )
+                          AND next_attempt_at <= :now
+                          AND (lease_expires_at IS NULL OR lease_expires_at < :now)
+                        ORDER BY next_attempt_at, created_at
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                    )
+                    UPDATE jobs j
+                    SET state = 'leased', attempts = j.attempts + 1,
+                        lease_owner = :worker_name,
+                        lease_expires_at = :now + interval '60 seconds',
+                        updated_at = :now
+                    FROM candidate
+                    WHERE j.id = candidate.id
+                    RETURNING j.id, j.event_id, j.attempts
+                    """
+                ),
+                {"now": now, "worker_name": worker_name},
+            )
+            .mappings()
+            .one_or_none()
+        )
+    return dict(row) if row else None
+
+
+def _complete_analysis_job(engine: Engine, job_id: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(
             text(
                 """
-                SELECT e.id
-                FROM events e
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM analyses a WHERE a.event_id = e.id
-                )
-                  AND e.event_type <> 'pipeline.started'
-                ORDER BY e.observed_at
-                LIMIT :limit
+                UPDATE jobs SET state = 'succeeded', lease_owner = NULL,
+                    lease_expires_at = NULL, last_error = NULL, updated_at = now()
+                WHERE id = :job_id
                 """
             ),
-            {"limit": limit},
-        ).scalars().all()
-        event_ids = [str(event_id) for event_id in raw_event_ids]
-    completed = 0
-    for event_id in event_ids:
-        try:
-            if analyze_new_event(engine, event_id):
-                completed += 1
-        except Exception:  # noqa: BLE001 - analysis must not stop polling or delivery
-            logger.exception("event analysis failed for event %s", event_id)
-    return completed
+            {"job_id": job_id},
+        )
+
+
+def _fail_analysis_job(
+    engine: Engine, job: dict[str, Any], error: Exception, now: datetime
+) -> None:
+    attempts = int(job["attempts"])
+    terminal = attempts >= MAX_JOB_ATTEMPTS
+    next_attempt = now + timedelta(seconds=min(3600, 30 * (2 ** min(attempts - 1, 5))))
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE jobs SET state = :state, next_attempt_at = :next_attempt_at,
+                    lease_owner = NULL, lease_expires_at = NULL,
+                    last_error = :last_error, updated_at = :updated_at
+                WHERE id = :job_id
+                """
+            ),
+            {
+                "state": "dead" if terminal else "retryable_failed",
+                "next_attempt_at": next_attempt,
+                "last_error": type(error).__name__[:200],
+                "updated_at": now,
+                "job_id": job["id"],
+            },
+        )
 
 
 def _analysis_exists(engine: Engine, event_id: str, evidence_hash_value: str, model: str) -> bool:
