@@ -84,6 +84,25 @@ export type RoutingRule = {
   created_at: string;
   updated_at: string;
 };
+export type Membership = {
+  user_id: string;
+  email: string;
+  role: "owner" | "admin" | "member";
+};
+export type Team = {
+  id: string;
+  organization_id: string;
+  name: string;
+  member_ids: string[];
+};
+export type Invitation = {
+  id: string;
+  organization_id: string;
+  email: string;
+  role: "admin" | "member";
+  expires_at: string;
+  invite_token: string;
+};
 
 export type AdminHealth = {
   status: "healthy" | "degraded" | "critical";
@@ -130,6 +149,55 @@ export async function createOrganization(name: string): Promise<Organization> {
     { headers: csrfHeaders() },
   );
   return response.data;
+}
+
+export async function listMembers(organizationId: string): Promise<Membership[]> {
+  const response = await api.get<Membership[]>(
+    `/api/v1/organizations/${organizationId}/members`,
+  );
+  return response.data;
+}
+
+export async function createInvitation(
+  organizationId: string,
+  input: { email: string; role: "admin" | "member" },
+): Promise<Invitation> {
+  const response = await api.post<Invitation>(
+    `/api/v1/organizations/${organizationId}/invitations`,
+    input,
+    { headers: csrfHeaders() },
+  );
+  return response.data;
+}
+
+export async function acceptInvitation(token: string, password: string): Promise<void> {
+  await api.post("/api/v1/invitations/accept", { token, password });
+}
+
+export async function listTeams(organizationId: string): Promise<Team[]> {
+  const response = await api.get<Team[]>(`/api/v1/organizations/${organizationId}/teams`);
+  return response.data;
+}
+
+export async function createTeam(organizationId: string, name: string): Promise<Team> {
+  const response = await api.post<Team>(
+    `/api/v1/organizations/${organizationId}/teams`,
+    { name },
+    { headers: csrfHeaders() },
+  );
+  return response.data;
+}
+
+export async function addTeamMember(teamId: string, userId: string): Promise<void> {
+  await api.post(
+    `/api/v1/teams/${teamId}/members`,
+    { user_id: userId },
+    { headers: csrfHeaders() },
+  );
+}
+
+export async function deleteTeam(teamId: string): Promise<void> {
+  await api.delete(`/api/v1/teams/${teamId}`, { headers: csrfHeaders() });
 }
 
 export async function listOrganizations(): Promise<Organization[]> {
