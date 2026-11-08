@@ -105,8 +105,31 @@ function ProjectCard({ project, organizationId }: { project: Project; organizati
   );
 }
 
+type RouteKey = "overview" | "integrations" | "projects" | "activity";
+const routeLabels: Record<RouteKey, string> = {
+  overview: "Overview",
+  integrations: "Integrations",
+  projects: "Projects",
+  activity: "Activity",
+};
+
+function useHashRoute(): [RouteKey, (route: RouteKey) => void] {
+  const readRoute = (): RouteKey => {
+    const route = window.location.hash.slice(1) as RouteKey;
+    return route in routeLabels ? route : "integrations";
+  };
+  const [route, setRoute] = useState<RouteKey>(readRoute);
+  useEffect(() => {
+    const onHashChange = () => setRoute(readRoute());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  return [route, (nextRoute) => { window.location.hash = nextRoute; setRoute(nextRoute); }];
+}
+
 function AuthenticatedApp() {
   const queryClient = useQueryClient();
+  const [route, navigate] = useHashRoute();
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: listOrganizations });
   const [organizationId, setOrganizationId] = useState<string>();
   const selectedOrganizationId = organizationId ?? organizations.data?.[0]?.id;
@@ -167,9 +190,9 @@ function AuthenticatedApp() {
 
   return (
     <main className="shell">
-      <aside className="sidebar"><div className="brand"><span className="brand-mark">RG</span><span>Release Guardian</span></div><nav aria-label="Primary navigation"><a href="#overview"><span className="nav-icon" aria-hidden="true">⌂</span><span>Overview</span></a><a className="active" href="#integrations"><span className="nav-icon" aria-hidden="true">◈</span><span>Integrations</span></a><a href="#projects"><span className="nav-icon" aria-hidden="true">▦</span><span>Projects</span></a><a href="#activity"><span className="nav-icon" aria-hidden="true">◷</span><span>Activity</span></a></nav></aside>
+      <aside className="sidebar"><div className="brand"><span className="brand-mark">RG</span><span>Release Guardian</span></div><nav aria-label="Primary navigation"><a className={route === "overview" ? "active" : ""} href="#overview" onClick={() => navigate("overview")}><span className="nav-icon" aria-hidden="true">⌂</span><span>Overview</span></a><a className={route === "integrations" ? "active" : ""} href="#integrations" onClick={() => navigate("integrations")}><span className="nav-icon" aria-hidden="true">◈</span><span>Integrations</span></a><a className={route === "projects" ? "active" : ""} href="#projects" onClick={() => navigate("projects")}><span className="nav-icon" aria-hidden="true">▦</span><span>Projects</span></a><a className={route === "activity" ? "active" : ""} href="#activity" onClick={() => navigate("activity")}><span className="nav-icon" aria-hidden="true">◷</span><span>Activity</span></a></nav></aside>
       <section className="content">
-        <header className="topbar"><span>Integrations</span><div className="topbar-actions"><button className="theme-toggle" type="button" onClick={() => { const next = document.documentElement.dataset.theme === "light" ? "dark" : "light"; document.documentElement.dataset.theme = next; localStorage.setItem("rg-theme", next); }} aria-label="Toggle color theme">◐ <span>Theme</span></button><span className="status"><i /> Session active</span></div></header>
+        <header className="topbar"><div className="topbar-title"><span>{routeLabels[route]}</span>{organizations.data?.length ? <label className="org-switcher"><span className="sr-only">Organization</span><select value={selectedOrganizationId} onChange={(event) => setOrganizationId(event.target.value)}>{organizations.data.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label> : null}</div><div className="topbar-actions"><button className="theme-toggle" type="button" onClick={() => { const next = document.documentElement.dataset.theme === "light" ? "dark" : "light"; document.documentElement.dataset.theme = next; localStorage.setItem("rg-theme", next); }} aria-label="Toggle color theme">◐ <span>Theme</span></button><span className="status"><i className={health.data?.worker.status === "healthy" ? "" : "status-warning"} /> Worker {health.data?.worker.status ?? "checking"}</span></div></header>
         <div className="page-heading"><div><p className="eyebrow">Instance configuration</p><h1>Connect your release tools.</h1><p className="muted">Store provider metadata and rotate credentials without restarting the services.</p></div></div>
         <section className="health-panel panel">
           <div className="section-heading"><div><span className="label">Operational health</span><h2>Runtime status</h2></div>{health.data && <span className={`pill ${health.data.status === "healthy" ? "pill-good" : "pill-muted"}`}>{health.data.status}</span>}</div>
@@ -188,7 +211,7 @@ function AuthenticatedApp() {
         <section className="workspace-grid">
           <div className="panel"><span className="label">Register project</span>{gitlabIntegrations.length ? <form onSubmit={(event) => { event.preventDefault(); createMonitoredProject.mutate(); }} className="form-stack"><label>GitLab integration<select value={gitlabIntegrationId || gitlabIntegrations[0].id} onChange={(event) => setGitlabIntegrationId(event.target.value)}>{gitlabIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name}</option>)}</select></label><label>Project ID or path<input value={externalProjectId} onChange={(event) => setExternalProjectId(event.target.value)} placeholder="group/project or 123456" required /></label><label>Display name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Staging release project" required /></label><p className="muted">Polling defaults to 300 seconds. Branches default to Develop, Stage, and Main.</p><Button type="submit" disabled={createMonitoredProject.isPending}>{createMonitoredProject.isPending ? "Registering…" : "Register project"}</Button></form> : <p className="muted">Add a GitLab integration first, then register a project here.</p>}{createMonitoredProject.isError && <p className="error">{apiErrorMessage(createMonitoredProject.error, "Project registration failed. Check the GitLab integration and permissions.")}</p>}</div>
           <div className="panel"><span className="label">Observed events</span>{events.data?.length ? <div className="event-list">{events.data.map((event) => <div className="event-row" key={event.id}><div><strong>{event.event_type}</strong><span className="fact-line"><span className="fact-marker" aria-hidden="true">✓</span>{String(event.facts.ref ?? "unknown ref")} · {String(event.facts.sha ?? "unknown SHA")}</span>{event.analysis && <span className="hypothesis-line"><span className="hypothesis-tag">Hypothesis</span>{String(event.analysis.summary ?? "Analysis available")}</span>}</div><span className={`pill ${event.analysis_status === "complete" ? "pill-info" : event.analysis_status === "fallback" ? "pill-warning" : "pill-muted"}`}>{event.analysis_status === "complete" ? "Analyzed" : event.analysis_status === "fallback" ? "Factual fallback" : "Observed"}</span></div>)}</div> : <p className="muted">No pipeline events observed yet.</p>}</div>
-          <div className="panel"><span className="label">Notification delivery</span>{deliveries.data?.length ? <div className="event-list">{deliveries.data.map((delivery: Delivery) => <div className="event-row" key={delivery.id}><div><strong>{delivery.kind}</strong><span className="muted">Attempts: {delivery.attempts}</span></div><span className={`pill ${delivery.status === "delivered" ? "pill-good" : delivery.status === "failed" ? "pill-danger" : "pill-warning"}`}>{delivery.status}</span></div>)}</div> : <p className="muted">No notification deliveries yet.</p>}</div>
+          <div id="activity" className="panel"><span className="label">Notification delivery</span>{deliveries.data?.length ? <div className="event-list">{deliveries.data.map((delivery: Delivery) => <div className="event-row" key={delivery.id}><div><strong>{delivery.kind}</strong><span className="muted">Attempts: {delivery.attempts}</span></div><span className={`pill ${delivery.status === "delivered" ? "pill-good" : delivery.status === "failed" ? "pill-danger" : "pill-warning"}`}>{delivery.status}</span></div>)}</div> : <p className="muted">No notification deliveries yet.</p>}</div>
         </section>
         {projects.isError && <p className="error">Unable to load monitored projects for this organization.</p>}
         <section className="project-list">{projects.data?.length ? projects.data.map((project) => <ProjectCard key={project.id} project={project} organizationId={selectedOrganizationId!} />) : <div className="empty-state"><div className="empty-icon">⌁</div><h2>No monitored projects</h2><p className="muted">Register a GitLab project above to start tracking pipeline state.</p></div>}</section>
