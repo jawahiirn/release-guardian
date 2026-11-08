@@ -133,3 +133,59 @@ def test_integration_environment_has_a_valid_encryption_key(monkeypatch) -> None
     encoded = base64.urlsafe_b64encode(b"i" * 32).decode("ascii")
     monkeypatch.setenv("ENCRYPTION_MASTER_KEY", encoded)
     assert len(base64.urlsafe_b64decode(encoded)) == 32
+
+
+def test_invitation_acceptance_creates_membership_and_team_assignment(
+    integration_engine: Engine, monkeypatch
+) -> None:
+    owner_email = f"owner-{uuid4().hex}@example.com"
+    _, organization_id = _seed_tenant(integration_engine, owner_email)
+    monkeypatch.setattr(api_main, "engine", integration_engine)
+    owner = TestClient(api_main.app)
+    login = owner.post(
+        "/api/v1/auth/login",
+        json={"email": owner_email, "password": "integration-password"},
+    )
+    csrf_token = login.json()["csrf_token"]
+    headers = {"X-CSRF-Token": csrf_token}
+    invitee_email = f"invitee-{uuid4().hex}@example.com"
+    invitation = owner.post(
+        f"/api/v1/organizations/{organization_id}/invitations",
+        json={"email": invitee_email, "role": "member"},
+        headers=headers,
+    )
+    assert invitation.status_code == 201
+
+    invitee = TestClient(api_main.app)
+    accepted = invitee.post(
+        "/api/v1/invitations/accept",
+        json={
+            "token": invitation.json()["invite_token"],
+            "password": "invitee-password",
+        },
+    )
+    assert accepted.status_code == 204
+    invitee_login = invitee.post(
+        "/api/v1/auth/login",
+        json={"email": invitee_email, "password": "invitee-password"},
+    )
+    assert invitee_login.status_code == 200
+    organizations = invitee.get("/api/v1/organizations").json()
+    assert any(item["id"] == organization_id and item["role"] == "member" for item in organizations)
+
+    members = owner.get(f"/api/v1/organizations/{organization_id}/members").json()
+    invitee_id = next(item["user_id"] for item in members if item["email"] == invitee_email)
+    team = owner.post(
+        f"/api/v1/organizations/{organization_id}/teams",
+        json={"name": "Release Team"},
+        headers=headers,
+    )
+    assert team.status_code == 201
+    assignment = owner.post(
+        f"/api/v1/teams/{team.json()['id']}/members",
+        json={"user_id": invitee_id},
+        headers=headers,
+    )
+    assert assignment.status_code == 204
+    teams = owner.get(f"/api/v1/organizations/{organization_id}/teams").json()
+    assert teams[0]["member_ids"] == [invitee_id]

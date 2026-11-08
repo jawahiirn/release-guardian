@@ -82,6 +82,10 @@ The secret is never returned by the API or written to audit metadata. Every secr
 
 The frontend now includes a sign-in screen and an Integrations workspace. It supports organization selection/creation, provider metadata entry, write-only secret replacement, and local configuration validation. The validation action is deliberately network-free; it does not send Discord/Pushover messages or contact GitLab/OpenAI yet.
 
+## Identity administration
+
+Organization owners and admins can create seven-day invitation tokens, list members, create teams, and assign organization members to teams through the versioned API. Invitation acceptance creates a user when the invited email is new, or verifies the existing user's password before adding membership. Raw invitation tokens are returned only by the create response for manual sharing and are stored only as hashes.
+
 ## Milestone 3 monitoring slice
 
 The current monitoring slice adds GitLab project registration and a PostgreSQL-backed polling worker. The Projects workspace is available in the frontend after sign-in; it registers projects, displays polling state, schedules an immediate read-only poll, and shows recent observed events. The same operations are available in Swagger through `POST /api/v1/organizations/{organization_id}/projects`, `POST /api/v1/projects/{project_id}/poll-now`, `GET /api/v1/organizations/{organization_id}/projects`, and `GET /api/v1/organizations/{organization_id}/events`.

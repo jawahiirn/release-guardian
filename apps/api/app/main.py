@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -16,7 +16,7 @@ from packages.crypto import SecretCipher
 from packages.integrations import IntegrationConfigError, validate_integration_config
 from packages.notifications import DiscordWebhookProvider, NotificationDeliveryError
 from packages.observability import RequestContextMiddleware, configure_json_logging
-from packages.security import hash_token, new_token, session_expiry, verify_password
+from packages.security import hash_password, hash_token, new_token, session_expiry, verify_password
 
 configure_json_logging("api")
 logger = logging.getLogger(__name__)
@@ -119,6 +119,46 @@ class OrganizationResponse(BaseModel):
     name: str
     slug: str
     role: str
+
+
+class InvitationCreate(BaseModel):
+    email: EmailStr
+    role: Literal["admin", "member"] = "member"
+
+
+class InvitationResponse(BaseModel):
+    id: str
+    organization_id: str
+    email: EmailStr
+    role: Literal["admin", "member"]
+    expires_at: datetime
+    invite_token: str
+
+
+class InvitationAccept(BaseModel):
+    token: str = Field(min_length=20, max_length=500)
+    password: str = Field(min_length=12, max_length=256)
+
+
+class MembershipResponse(BaseModel):
+    user_id: str
+    email: EmailStr
+    role: Literal["owner", "admin", "member"]
+
+
+class TeamCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class TeamResponse(BaseModel):
+    id: str
+    organization_id: str
+    name: str
+    member_ids: list[str]
+
+
+class TeamMemberCreate(BaseModel):
+    user_id: UUID
 
 
 class IntegrationCreate(BaseModel):
@@ -611,6 +651,318 @@ def create_organization(
             {"organization_id": organization["id"], "user_id": session["user_id"]},
         )
     return {**dict(organization), "id": str(organization["id"]), "role": "owner"}
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/members",
+    response_model=list[MembershipResponse],
+    tags=["organizations"],
+    summary="List organization members",
+)
+def list_members(
+    organization_id: str, session: Annotated[dict, Depends(current_session)]
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT u.id AS user_id, u.email, m.role
+                    FROM memberships m JOIN users u ON u.id = m.user_id
+                    WHERE m.organization_id = :organization_id
+                    ORDER BY u.email
+                    """
+                ),
+                {"organization_id": organization_id},
+            )
+            .mappings()
+            .all()
+        )
+    return [{**dict(row), "user_id": str(row["user_id"])} for row in rows]
+
+
+@app.post(
+    "/api/v1/organizations/{organization_id}/invitations",
+    response_model=InvitationResponse,
+    status_code=201,
+    tags=["organizations"],
+    summary="Create an expiring organization invitation",
+)
+def create_invitation(
+    organization_id: str,
+    payload: InvitationCreate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> dict:
+    raw_token = new_token()
+    expires_at = datetime.now(UTC) + timedelta(days=7)
+    with engine.begin() as connection:
+        require_org_admin(connection, organization_id, str(session["user_id"]))
+        existing_member = connection.execute(
+            text(
+                """
+                SELECT 1 FROM memberships m JOIN users u ON u.id = m.user_id
+                WHERE m.organization_id = :organization_id AND lower(u.email) = lower(:email)
+                """
+            ),
+            {"organization_id": organization_id, "email": str(payload.email)},
+        ).scalar_one_or_none()
+        if existing_member is not None:
+            raise HTTPException(status_code=409, detail="user is already a member")
+        invitation = (
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO invitations (
+                        organization_id, email, role, token_hash, expires_at, invited_by
+                    ) VALUES (
+                        :organization_id, :email, :role, :token_hash, :expires_at, :invited_by
+                    )
+                    RETURNING id, organization_id, email, role, expires_at
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "email": str(payload.email).lower(),
+                    "role": payload.role,
+                    "token_hash": hash_token(raw_token),
+                    "expires_at": expires_at,
+                    "invited_by": session["user_id"],
+                },
+            )
+            .mappings()
+            .one()
+        )
+        audit(
+            connection,
+            organization_id,
+            str(session["user_id"]),
+            "invitation.created",
+            str(invitation["id"]),
+            {"email": str(payload.email).lower(), "role": payload.role},
+        )
+    return {
+        **dict(invitation),
+        "id": str(invitation["id"]),
+        "organization_id": str(invitation["organization_id"]),
+        "invite_token": raw_token,
+    }
+
+
+@app.post(
+    "/api/v1/invitations/accept",
+    status_code=204,
+    tags=["organizations"],
+    summary="Accept an organization invitation",
+)
+def accept_invitation(payload: InvitationAccept) -> None:
+    with engine.begin() as connection:
+        invitation = (
+            connection.execute(
+                text(
+                    """
+                    SELECT id, organization_id, email, role
+                    FROM invitations
+                    WHERE token_hash = :token_hash AND accepted_at IS NULL
+                      AND expires_at > now()
+                    FOR UPDATE
+                    """
+                ),
+                {"token_hash": hash_token(payload.token)},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if invitation is None:
+            raise HTTPException(status_code=404, detail="invitation not found or expired")
+        user = (
+            connection.execute(
+                text("SELECT id, password_hash FROM users WHERE lower(email) = lower(:email)"),
+                {"email": invitation["email"]},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if user is None:
+            user_id = connection.execute(
+                text(
+                    "INSERT INTO users (email, password_hash) "
+                    "VALUES (:email, :password_hash) RETURNING id"
+                ),
+                {
+                    "email": invitation["email"],
+                    "password_hash": hash_password(payload.password),
+                },
+            ).scalar_one()
+        else:
+            if not verify_password(user["password_hash"], payload.password):
+                raise HTTPException(status_code=401, detail="invalid credentials")
+            user_id = user["id"]
+        connection.execute(
+            text(
+                """
+                INSERT INTO memberships (organization_id, user_id, role)
+                VALUES (:organization_id, :user_id, :role)
+                ON CONFLICT (organization_id, user_id) DO NOTHING
+                """
+            ),
+            {
+                "organization_id": invitation["organization_id"],
+                "user_id": user_id,
+                "role": invitation["role"],
+            },
+        )
+        connection.execute(
+            text("UPDATE invitations SET accepted_at = now() WHERE id = :invitation_id"),
+            {"invitation_id": invitation["id"]},
+        )
+        audit(
+            connection,
+            str(invitation["organization_id"]),
+            str(user_id),
+            "invitation.accepted",
+            str(invitation["id"]),
+            {"role": invitation["role"]},
+        )
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/teams",
+    response_model=list[TeamResponse],
+    tags=["organizations"],
+    summary="List organization teams",
+)
+def list_teams(
+    organization_id: str, session: Annotated[dict, Depends(current_session)]
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT t.id, t.organization_id, t.name,
+                           COALESCE(array_agg(tm.user_id) FILTER (WHERE tm.user_id IS NOT NULL),
+                                    ARRAY[]::uuid[]) AS member_ids
+                    FROM teams t LEFT JOIN team_members tm ON tm.team_id = t.id
+                    WHERE t.organization_id = :organization_id
+                    GROUP BY t.id ORDER BY t.name
+                    """
+                ),
+                {"organization_id": organization_id},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+            "member_ids": [str(member_id) for member_id in row["member_ids"]],
+        }
+        for row in rows
+    ]
+
+
+@app.post(
+    "/api/v1/organizations/{organization_id}/teams",
+    response_model=TeamResponse,
+    status_code=201,
+    tags=["organizations"],
+    summary="Create an organization team",
+)
+def create_team(
+    organization_id: str,
+    payload: TeamCreate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> dict:
+    with engine.begin() as connection:
+        require_org_admin(connection, organization_id, str(session["user_id"]))
+        try:
+            team = (
+                connection.execute(
+                    text(
+                        "INSERT INTO teams (organization_id, name) "
+                        "VALUES (:organization_id, :name) "
+                        "RETURNING id, organization_id, name"
+                    ),
+                    {"organization_id": organization_id, "name": payload.name.strip()},
+                )
+                .mappings()
+                .one()
+            )
+        except IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="team name already exists") from exc
+        audit(
+            connection,
+            organization_id,
+            str(session["user_id"]),
+            "team.created",
+            str(team["id"]),
+            {"name": payload.name.strip()},
+        )
+    return {
+        **dict(team),
+        "id": str(team["id"]),
+        "organization_id": organization_id,
+        "member_ids": [],
+    }
+
+
+@app.post(
+    "/api/v1/teams/{team_id}/members",
+    status_code=204,
+    tags=["organizations"],
+    summary="Add an organization member to a team",
+)
+def add_team_member(
+    team_id: UUID,
+    payload: TeamMemberCreate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> None:
+    with engine.begin() as connection:
+        organization_id = connection.execute(
+            text("SELECT organization_id FROM teams WHERE id = :team_id"),
+            {"team_id": str(team_id)},
+        ).scalar_one_or_none()
+        if organization_id is None:
+            raise HTTPException(status_code=404, detail="team not found")
+        require_org_admin(connection, str(organization_id), str(session["user_id"]))
+        membership = connection.execute(
+            text(
+                "SELECT 1 FROM memberships "
+                "WHERE organization_id = :organization_id AND user_id = :user_id"
+            ),
+            {"organization_id": organization_id, "user_id": str(payload.user_id)},
+        ).scalar_one_or_none()
+        if membership is None:
+            raise HTTPException(status_code=404, detail="organization member not found")
+        connection.execute(
+            text(
+                "INSERT INTO team_members (team_id, user_id) VALUES (:team_id, :user_id) "
+                "ON CONFLICT (team_id, user_id) DO NOTHING"
+            ),
+            {"team_id": str(team_id), "user_id": str(payload.user_id)},
+        )
+
+
+@app.delete(
+    "/api/v1/teams/{team_id}",
+    status_code=204,
+    tags=["organizations"],
+    summary="Delete an organization team",
+)
+def delete_team(team_id: UUID, session: Annotated[dict, Depends(require_csrf)]) -> None:
+    with engine.begin() as connection:
+        organization_id = connection.execute(
+            text("SELECT organization_id FROM teams WHERE id = :team_id"),
+            {"team_id": str(team_id)},
+        ).scalar_one_or_none()
+        if organization_id is None:
+            raise HTTPException(status_code=404, detail="team not found")
+        require_org_admin(connection, str(organization_id), str(session["user_id"]))
+        connection.execute(text("DELETE FROM teams WHERE id = :team_id"), {"team_id": str(team_id)})
 
 
 @app.get(
