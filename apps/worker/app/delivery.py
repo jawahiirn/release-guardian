@@ -32,8 +32,25 @@ def enqueue_event_notifications(connection: Any, event_id: str, organization_id:
             SELECT d.organization_id, CAST(:event_id AS uuid), d.id, d.kind,
                    jsonb_build_object('event_id', CAST(:event_id AS text))
             FROM destinations d
+            JOIN events e ON e.id = CAST(:event_id AS uuid)
             WHERE d.organization_id = :organization_id
               AND d.kind IN ('discord', 'pushover') AND d.enabled
+              AND (
+                NOT EXISTS (
+                    SELECT 1 FROM routing_rules rr0
+                    WHERE rr0.destination_id = d.id AND rr0.enabled
+                )
+                OR EXISTS (
+                    SELECT 1 FROM routing_rules rr
+                    WHERE rr.destination_id = d.id
+                      AND rr.enabled
+                      AND (rr.project_id IS NULL OR rr.project_id = e.project_id)
+                      AND (
+                        jsonb_array_length(rr.event_types_json) = 0
+                        OR rr.event_types_json @> jsonb_build_array(e.event_type)
+                      )
+                )
+              )
             ON CONFLICT (event_id, destination_id, kind) DO NOTHING
             RETURNING id
             """

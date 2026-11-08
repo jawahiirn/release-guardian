@@ -59,6 +59,10 @@ app = FastAPI(
             "name": "events",
             "description": "Organization-scoped observed GitLab events.",
         },
+        {
+            "name": "routing",
+            "description": "Organization-scoped notification routing rules.",
+        },
     ],
 )
 app.add_middleware(
@@ -71,7 +75,7 @@ app.add_middleware(
         if origin.strip()
     ],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", CSRF_HEADER],
 )
 app.add_middleware(RequestContextMiddleware)
@@ -230,6 +234,34 @@ class DeliveryResponse(BaseModel):
 class DeliveryRetryResponse(BaseModel):
     delivery_id: str
     status: Literal["scheduled"]
+
+
+class RoutingRuleCreate(BaseModel):
+    destination_id: UUID
+    name: str = Field(min_length=1, max_length=120)
+    event_types: list[str] = Field(default_factory=list, max_length=20)
+    project_id: UUID | None = None
+    enabled: bool = True
+
+
+class RoutingRuleResponse(BaseModel):
+    id: str
+    organization_id: str
+    destination_id: str
+    name: str
+    event_types: list[str]
+    project_id: str | None = None
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class DestinationResponse(BaseModel):
+    id: str
+    organization_id: str
+    kind: Literal["discord", "pushover"]
+    display_name: str
+    enabled: bool
 
 
 def require_org_admin(connection, organization_id: str, user_id: str) -> None:
@@ -935,6 +967,182 @@ def test_notification(
         "live_check": True,
         "message": "Discord test notification sent.",
     }
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/destinations",
+    response_model=list[DestinationResponse],
+    tags=["routing"],
+    summary="List notification destinations",
+)
+def list_destinations(
+    organization_id: str, session: Annotated[dict, Depends(current_session)]
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT id, organization_id, kind, display_name, enabled
+                    FROM destinations
+                    WHERE organization_id = :organization_id
+                    ORDER BY display_name
+                    """
+                ),
+                {"organization_id": organization_id},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+        }
+        for row in rows
+    ]
+
+
+@app.get(
+    "/api/v1/organizations/{organization_id}/routing-rules",
+    response_model=list[RoutingRuleResponse],
+    tags=["routing"],
+    summary="List notification routing rules",
+)
+def list_routing_rules(
+    organization_id: str, session: Annotated[dict, Depends(current_session)]
+) -> list[dict]:
+    with engine.connect() as connection:
+        require_org_member(connection, organization_id, str(session["user_id"]))
+        rows = (
+            connection.execute(
+                text(
+                    """
+                    SELECT id, organization_id, destination_id, name,
+                           event_types_json AS event_types, project_id, enabled,
+                           created_at, updated_at
+                    FROM routing_rules
+                    WHERE organization_id = :organization_id
+                    ORDER BY created_at DESC
+                    """
+                ),
+                {"organization_id": organization_id},
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        {
+            **dict(row),
+            "id": str(row["id"]),
+            "organization_id": str(row["organization_id"]),
+            "destination_id": str(row["destination_id"]),
+            "project_id": str(row["project_id"]) if row["project_id"] else None,
+        }
+        for row in rows
+    ]
+
+
+@app.post(
+    "/api/v1/organizations/{organization_id}/routing-rules",
+    response_model=RoutingRuleResponse,
+    status_code=201,
+    tags=["routing"],
+    summary="Create a notification routing rule",
+)
+def create_routing_rule(
+    organization_id: str,
+    payload: RoutingRuleCreate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> dict:
+    event_types = [event_type.strip() for event_type in payload.event_types if event_type.strip()]
+    with engine.begin() as connection:
+        require_org_admin(connection, organization_id, str(session["user_id"]))
+        destination = connection.execute(
+            text(
+                "SELECT id FROM destinations "
+                "WHERE id = :destination_id AND organization_id = :organization_id"
+            ),
+            {"destination_id": str(payload.destination_id), "organization_id": organization_id},
+        ).scalar_one_or_none()
+        if destination is None:
+            raise HTTPException(status_code=404, detail="destination not found")
+        if payload.project_id is not None:
+            project = connection.execute(
+                text(
+                    "SELECT id FROM projects "
+                    "WHERE id = :project_id AND organization_id = :organization_id"
+                ),
+                {"project_id": str(payload.project_id), "organization_id": organization_id},
+            ).scalar_one_or_none()
+            if project is None:
+                raise HTTPException(status_code=404, detail="project not found")
+        rule = (
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO routing_rules (
+                        organization_id, destination_id, name, event_types_json, project_id, enabled
+                    ) VALUES (
+                        :organization_id, :destination_id, :name,
+                        CAST(:event_types AS jsonb), :project_id, :enabled
+                    )
+                    RETURNING id, organization_id, destination_id, name,
+                              event_types_json AS event_types, project_id, enabled,
+                              created_at, updated_at
+                    """
+                ),
+                {
+                    "organization_id": organization_id,
+                    "destination_id": str(payload.destination_id),
+                    "name": payload.name.strip(),
+                    "event_types": json.dumps(event_types),
+                    "project_id": str(payload.project_id) if payload.project_id else None,
+                    "enabled": payload.enabled,
+                },
+            )
+            .mappings()
+            .one()
+        )
+        audit(
+            connection,
+            organization_id,
+            str(session["user_id"]),
+            "routing_rule.created",
+            str(rule["id"]),
+            {"name": payload.name.strip(), "destination_id": str(payload.destination_id)},
+        )
+    return {
+        **dict(rule),
+        "id": str(rule["id"]),
+        "organization_id": str(rule["organization_id"]),
+        "destination_id": str(rule["destination_id"]),
+        "project_id": str(rule["project_id"]) if rule["project_id"] else None,
+    }
+
+
+@app.delete(
+    "/api/v1/routing-rules/{rule_id}",
+    status_code=204,
+    tags=["routing"],
+    summary="Delete a notification routing rule",
+)
+def delete_routing_rule(
+    rule_id: UUID, session: Annotated[dict, Depends(require_csrf)]
+) -> None:
+    with engine.begin() as connection:
+        organization_id = connection.execute(
+            text("SELECT organization_id FROM routing_rules WHERE id = :rule_id"),
+            {"rule_id": str(rule_id)},
+        ).scalar_one_or_none()
+        if organization_id is None:
+            raise HTTPException(status_code=404, detail="routing rule not found")
+        require_org_admin(connection, str(organization_id), str(session["user_id"]))
+        connection.execute(
+            text("DELETE FROM routing_rules WHERE id = :rule_id"), {"rule_id": str(rule_id)}
+        )
 
 
 @app.get(

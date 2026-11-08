@@ -66,6 +66,24 @@ export type Delivery = {
   next_attempt_at: string;
   last_attempt_at: string | null;
 };
+export type Destination = {
+  id: string;
+  organization_id: string;
+  kind: "discord" | "pushover";
+  display_name: string;
+  enabled: boolean;
+};
+export type RoutingRule = {
+  id: string;
+  organization_id: string;
+  destination_id: string;
+  name: string;
+  event_types: string[];
+  project_id: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
 
 export type AdminHealth = {
   status: "healthy" | "degraded" | "critical";
@@ -206,6 +224,36 @@ export async function listDeliveries(organizationId: string): Promise<Delivery[]
     `/api/v1/organizations/${organizationId}/deliveries`,
   );
   return response.data;
+}
+
+export async function listDestinations(organizationId: string): Promise<Destination[]> {
+  const response = await api.get<Destination[]>(
+    `/api/v1/organizations/${organizationId}/destinations`,
+  );
+  return response.data;
+}
+
+export async function listRoutingRules(organizationId: string): Promise<RoutingRule[]> {
+  const response = await api.get<RoutingRule[]>(
+    `/api/v1/organizations/${organizationId}/routing-rules`,
+  );
+  return response.data;
+}
+
+export async function createRoutingRule(
+  organizationId: string,
+  input: { destination_id: string; name: string; event_types: string[]; project_id?: string },
+): Promise<RoutingRule> {
+  const response = await api.post<RoutingRule>(
+    `/api/v1/organizations/${organizationId}/routing-rules`,
+    input,
+    { headers: csrfHeaders() },
+  );
+  return response.data;
+}
+
+export async function deleteRoutingRule(ruleId: string): Promise<void> {
+  await api.delete(`/api/v1/routing-rules/${ruleId}`, { headers: csrfHeaders() });
 }
 
 export async function getAdminHealth(): Promise<AdminHealth> {
