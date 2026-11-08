@@ -663,19 +663,20 @@ def create_integration(
             .mappings()
             .one()
         )
-        if payload.type == "discord":
+        if payload.type in {"discord", "pushover"}:
             connection.execute(
                 text(
                     """
                     INSERT INTO destinations (
                         organization_id, integration_id, kind, display_name
-                    ) VALUES (:organization_id, :integration_id, 'discord', :display_name)
+                    ) VALUES (:organization_id, :integration_id, :kind, :display_name)
                     ON CONFLICT (integration_id) DO NOTHING
                     """
                 ),
                 {
                     "organization_id": organization_id,
                     "integration_id": integration["id"],
+                    "kind": payload.type,
                     "display_name": payload.display_name.strip(),
                 },
             )

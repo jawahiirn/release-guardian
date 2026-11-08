@@ -1,5 +1,6 @@
 """Durable at-least-once notification delivery for the worker."""
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,7 +11,9 @@ from packages.crypto import SecretCipher
 from packages.notifications import (
     DiscordWebhookProvider,
     NotificationDeliveryError,
+    PushoverProvider,
     format_pipeline_failure,
+    format_pushover_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -18,7 +21,7 @@ MAX_ATTEMPTS = 8
 
 
 def enqueue_event_notifications(connection: Any, event_id: str, organization_id: str) -> int:
-    """Create one logical Discord notification per event and enabled destination."""
+    """Create one logical notification per event and enabled destination."""
 
     inserted = connection.execute(
         text(
@@ -30,7 +33,7 @@ def enqueue_event_notifications(connection: Any, event_id: str, organization_id:
                    jsonb_build_object('event_id', CAST(:event_id AS text))
             FROM destinations d
             WHERE d.organization_id = :organization_id
-              AND d.kind = 'discord' AND d.enabled
+              AND d.kind IN ('discord', 'pushover') AND d.enabled
             ON CONFLICT (event_id, destination_id, kind) DO NOTHING
             RETURNING id
             """
@@ -46,6 +49,7 @@ def deliver_due_notifications(
     *,
     now: datetime | None = None,
     provider: DiscordWebhookProvider | None = None,
+    pushover_provider: PushoverProvider | None = None,
     max_items: int = 20,
 ) -> int:
     delivered = 0
@@ -54,7 +58,12 @@ def deliver_due_notifications(
         if outbox is None:
             break
         try:
-            _deliver_one(engine, outbox, provider or DiscordWebhookProvider())
+            _deliver_one(
+                engine,
+                outbox,
+                provider or DiscordWebhookProvider(),
+                pushover_provider or PushoverProvider(),
+            )
             _record_success(engine, outbox, now or datetime.now(UTC))
             delivered += 1
         except NotificationDeliveryError as exc:
@@ -105,7 +114,12 @@ def _claim_notification(engine: Engine, worker_name: str, now: datetime) -> dict
     return dict(row) if row else None
 
 
-def _deliver_one(engine: Engine, outbox: dict[str, Any], provider: DiscordWebhookProvider) -> None:
+def _deliver_one(
+    engine: Engine,
+    outbox: dict[str, Any],
+    discord_provider: DiscordWebhookProvider,
+    pushover_provider: PushoverProvider,
+) -> None:
     with engine.connect() as connection:
         destination = connection.execute(
             text(
@@ -134,21 +148,30 @@ def _deliver_one(engine: Engine, outbox: dict[str, Any], provider: DiscordWebhoo
                 "organization_id": outbox["organization_id"],
             },
         ).mappings().one_or_none()
-    if destination is None or destination["kind"] != "discord":
+    if destination is None or destination["kind"] not in {"discord", "pushover"}:
         raise NotificationDeliveryError("notification destination is unavailable")
     if destination["encrypted_blob"] is None:
-        raise NotificationDeliveryError("Discord destination has no credential")
+        raise NotificationDeliveryError(f"{destination['kind']} destination has no credential")
     try:
-        webhook_url = SecretCipher().decrypt(
+        secret = SecretCipher().decrypt(
             destination["encrypted_blob"], destination["nonce"], destination["key_id"]
         )
-        content = format_pipeline_failure(
-            {"facts": destination["facts"], "project_name": destination["project_name"]},
-            destination["analysis"],
-        )
-        provider.send(webhook_url, content)
+        event = {"facts": destination["facts"], "project_name": destination["project_name"]}
+        if destination["kind"] == "discord":
+            discord_provider.send(
+                secret,
+                format_pipeline_failure(event, destination["analysis"]),
+            )
+        else:
+            credentials = json.loads(secret)
+            if not isinstance(credentials, dict):
+                raise NotificationDeliveryError("Pushover credentials are invalid")
+            title, message = format_pushover_message(event, destination["analysis"])
+            pushover_provider.send(credentials, title, message)
+    except json.JSONDecodeError as exc:
+        raise NotificationDeliveryError("Pushover credentials are invalid") from exc
     except RuntimeError as exc:
-        raise NotificationDeliveryError("Discord credential could not be resolved") from exc
+        raise NotificationDeliveryError("notification credential could not be resolved") from exc
 
 
 def _record_failure(

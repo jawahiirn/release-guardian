@@ -1,9 +1,10 @@
-"""Provider-neutral notification payloads and Discord delivery adapter."""
+"""Provider-neutral notification payloads and provider delivery adapters."""
 
 import json
 from collections.abc import Callable
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -59,6 +60,57 @@ class DiscordWebhookProvider:
             ) from exc
         except (OSError, URLError, TimeoutError) as exc:
             raise NotificationDeliveryError("Discord webhook request failed") from exc
+
+
+class PushoverProvider:
+    """Pushover REST adapter using write-only token/user credentials."""
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+        request_fn: Callable[..., Any] | None = None,
+    ) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.request_fn = request_fn or _urlopen
+
+    def send(self, credentials: dict[str, Any], title: str, message: str) -> int:
+        token = credentials.get("token")
+        user_key = credentials.get("user_key")
+        if not isinstance(token, str) or not token or not isinstance(user_key, str) or not user_key:
+            raise NotificationDeliveryError("Pushover credentials are incomplete")
+        body = urlencode(
+            {
+                "token": token,
+                "user": user_key,
+                "title": title[:250],
+                "message": message[:1024],
+            }
+        ).encode("utf-8")
+        request = Request(
+            "https://api.pushover.net/1/messages.json",
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "ReleaseGuardian/0.1",
+            },
+            method="POST",
+        )
+        try:
+            with self.request_fn(request, timeout=self.timeout_seconds) as response:
+                response.read()
+                status = int(response.status)
+                if status < 200 or status >= 300:
+                    raise NotificationDeliveryError(
+                        f"Pushover returned HTTP {status}", http_status=status
+                    )
+                return status
+        except HTTPError as exc:
+            raise NotificationDeliveryError(
+                f"Pushover returned HTTP {exc.code}", http_status=exc.code
+            ) from exc
+        except (OSError, URLError, TimeoutError) as exc:
+            raise NotificationDeliveryError("Pushover request failed") from exc
 
 
 def _discord_error_detail(error: HTTPError) -> str:
@@ -152,3 +204,25 @@ def format_pipeline_failure(
         ],
         "allowed_mentions": {"parse": []},
     }
+
+
+def format_pushover_message(
+    event: dict[str, Any], analysis: dict[str, Any] | None
+) -> tuple[str, str]:
+    """Format the same bounded facts for Pushover's plain-text message body."""
+
+    raw_facts = event.get("facts")
+    facts = raw_facts if isinstance(raw_facts, dict) else {}
+    status = str(facts.get("status", "failed"))
+    ref = str(facts.get("ref", "unknown"))
+    pipeline_id = str(facts.get("pipeline_id", "unknown"))
+    label = "succeeded" if status == "success" else "started" if status in {
+        "created", "waiting_for_resource", "preparing", "pending", "running"
+    } else "failed"
+    title = f"Pipeline {label} · {ref}"[:250]
+    project_name = str(event.get("project_name") or "GitLab project")[:200]
+    summary = str(analysis.get("summary", "")).strip() if analysis else ""
+    message = f"{project_name}\nPipeline #{pipeline_id} on {ref}: {status}."
+    if summary:
+        message += f"\n\n{summary}"
+    return title, message[:1024]

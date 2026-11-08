@@ -2,7 +2,12 @@ import json
 from io import BytesIO
 from urllib.error import HTTPError
 
-from packages.notifications import DiscordWebhookProvider, format_pipeline_failure
+from packages.notifications import (
+    DiscordWebhookProvider,
+    PushoverProvider,
+    format_pipeline_failure,
+    format_pushover_message,
+)
 
 
 class FakeResponse:
@@ -101,3 +106,39 @@ def test_discord_provider_surfaces_sanitized_provider_error() -> None:
         assert "50013" in str(exc)
     else:
         raise AssertionError("expected Discord delivery to fail")
+
+
+def test_pushover_provider_posts_form_encoded_credentials_without_logging_them() -> None:
+    requests: list[tuple[object, float]] = []
+
+    def fake_request(request, *, timeout):
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    status = PushoverProvider(timeout_seconds=2.5, request_fn=fake_request).send(
+        {"token": "app-token", "user_key": "user-key"},
+        "Pipeline failed",
+        "Review the failed job.",
+    )
+
+    assert status == 204
+    request = requests[0][0]
+    assert request.full_url == "https://api.pushover.net/1/messages.json"
+    assert requests[0][1] == 2.5
+    assert request.headers["Content-type"] == "application/x-www-form-urlencoded"
+    assert b"token=app-token" in request.data
+    assert b"user=user-key" in request.data
+
+
+def test_pushover_message_is_bounded_and_keeps_analysis_advisory() -> None:
+    title, message = format_pushover_message(
+        {
+            "project_name": "Example",
+            "facts": {"pipeline_id": "42", "status": "failed", "ref": "Stage"},
+        },
+        {"summary": "Likely test failure; verify the job logs."},
+    )
+
+    assert title == "Pipeline failed · Stage"
+    assert "Likely test failure" in message
+    assert len(message) <= 1024
