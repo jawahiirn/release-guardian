@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import "./styles.css";
@@ -79,7 +79,8 @@ function IntegrationCard({ integration, organizationId }: { integration: Integra
         <input aria-label={`Replace ${integration.display_name} secret`} type="password" value={secret} onChange={(event) => setSecret(event.target.value)} placeholder="Replace provider secret" required />
         <Button type="submit" disabled={rotate.isPending}>{rotate.isPending ? "Saving…" : "Replace secret"}</Button>
       </form>
-      {rotate.isError && <p className="error">Secret replacement failed. Check the value and permissions.</p>}
+      {rotate.isSuccess && <p className="success" role="status">Secret replaced. Existing workers will use it on their next operation.</p>}
+      {rotate.isError && <p className="error" role="alert">Secret replacement failed. Check the value and permissions.</p>}
     </article>
   );
 }
@@ -166,9 +167,9 @@ function AuthenticatedApp() {
 
   return (
     <main className="shell">
-      <aside className="sidebar"><div className="brand"><span className="brand-mark">RG</span><span>Release Guardian</span></div><nav aria-label="Primary navigation"><a href="#overview">Overview</a><a className="active" href="#integrations">Integrations</a><a href="#projects">Projects</a><a href="#activity">Activity</a></nav></aside>
+      <aside className="sidebar"><div className="brand"><span className="brand-mark">RG</span><span>Release Guardian</span></div><nav aria-label="Primary navigation"><a href="#overview"><span className="nav-icon" aria-hidden="true">⌂</span><span>Overview</span></a><a className="active" href="#integrations"><span className="nav-icon" aria-hidden="true">◈</span><span>Integrations</span></a><a href="#projects"><span className="nav-icon" aria-hidden="true">▦</span><span>Projects</span></a><a href="#activity"><span className="nav-icon" aria-hidden="true">◷</span><span>Activity</span></a></nav></aside>
       <section className="content">
-        <header className="topbar"><span>Integrations</span><span className="status"><i /> Session active</span></header>
+        <header className="topbar"><span>Integrations</span><div className="topbar-actions"><button className="theme-toggle" type="button" onClick={() => { const next = document.documentElement.dataset.theme === "light" ? "dark" : "light"; document.documentElement.dataset.theme = next; localStorage.setItem("rg-theme", next); }} aria-label="Toggle color theme">◐ <span>Theme</span></button><span className="status"><i /> Session active</span></div></header>
         <div className="page-heading"><div><p className="eyebrow">Instance configuration</p><h1>Connect your release tools.</h1><p className="muted">Store provider metadata and rotate credentials without restarting the services.</p></div></div>
         <section className="health-panel panel">
           <div className="section-heading"><div><span className="label">Operational health</span><h2>Runtime status</h2></div>{health.data && <span className={`pill ${health.data.status === "healthy" ? "pill-good" : "pill-muted"}`}>{health.data.status}</span>}</div>
@@ -186,8 +187,8 @@ function AuthenticatedApp() {
         <section id="projects" className="section-heading"><div><span className="label">GitLab monitoring</span><h2>Projects</h2></div>{projects.isFetching && <span className="muted">Refreshing…</span>}</section>
         <section className="workspace-grid">
           <div className="panel"><span className="label">Register project</span>{gitlabIntegrations.length ? <form onSubmit={(event) => { event.preventDefault(); createMonitoredProject.mutate(); }} className="form-stack"><label>GitLab integration<select value={gitlabIntegrationId || gitlabIntegrations[0].id} onChange={(event) => setGitlabIntegrationId(event.target.value)}>{gitlabIntegrations.map((integration) => <option key={integration.id} value={integration.id}>{integration.display_name}</option>)}</select></label><label>Project ID or path<input value={externalProjectId} onChange={(event) => setExternalProjectId(event.target.value)} placeholder="group/project or 123456" required /></label><label>Display name<input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Staging release project" required /></label><p className="muted">Polling defaults to 300 seconds. Branches default to Develop, Stage, and Main.</p><Button type="submit" disabled={createMonitoredProject.isPending}>{createMonitoredProject.isPending ? "Registering…" : "Register project"}</Button></form> : <p className="muted">Add a GitLab integration first, then register a project here.</p>}{createMonitoredProject.isError && <p className="error">{apiErrorMessage(createMonitoredProject.error, "Project registration failed. Check the GitLab integration and permissions.")}</p>}</div>
-          <div className="panel"><span className="label">Observed events</span>{events.data?.length ? <div className="event-list">{events.data.map((event) => <div className="event-row" key={event.id}><div><strong>{event.event_type}</strong><span className="muted">{String(event.facts.ref ?? "unknown ref")} · {String(event.facts.sha ?? "unknown SHA")}</span>{event.analysis && <span className="muted">{String(event.analysis.summary ?? "Analysis available")}</span>}</div><span className={`pill ${event.analysis_status === "complete" ? "pill-good" : "pill-muted"}`}>{event.analysis_status === "complete" ? "Analyzed" : event.analysis_status === "fallback" ? "Factual fallback" : "Observed"}</span></div>)}</div> : <p className="muted">No pipeline events observed yet.</p>}</div>
-          <div className="panel"><span className="label">Notification delivery</span>{deliveries.data?.length ? <div className="event-list">{deliveries.data.map((delivery: Delivery) => <div className="event-row" key={delivery.id}><div><strong>{delivery.kind}</strong><span className="muted">Attempts: {delivery.attempts}</span></div><span className={`pill ${delivery.status === "delivered" ? "pill-good" : delivery.status === "failed" ? "pill-muted" : "pill-muted"}`}>{delivery.status}</span></div>)}</div> : <p className="muted">No notification deliveries yet.</p>}</div>
+          <div className="panel"><span className="label">Observed events</span>{events.data?.length ? <div className="event-list">{events.data.map((event) => <div className="event-row" key={event.id}><div><strong>{event.event_type}</strong><span className="fact-line"><span className="fact-marker" aria-hidden="true">✓</span>{String(event.facts.ref ?? "unknown ref")} · {String(event.facts.sha ?? "unknown SHA")}</span>{event.analysis && <span className="hypothesis-line"><span className="hypothesis-tag">Hypothesis</span>{String(event.analysis.summary ?? "Analysis available")}</span>}</div><span className={`pill ${event.analysis_status === "complete" ? "pill-info" : event.analysis_status === "fallback" ? "pill-warning" : "pill-muted"}`}>{event.analysis_status === "complete" ? "Analyzed" : event.analysis_status === "fallback" ? "Factual fallback" : "Observed"}</span></div>)}</div> : <p className="muted">No pipeline events observed yet.</p>}</div>
+          <div className="panel"><span className="label">Notification delivery</span>{deliveries.data?.length ? <div className="event-list">{deliveries.data.map((delivery: Delivery) => <div className="event-row" key={delivery.id}><div><strong>{delivery.kind}</strong><span className="muted">Attempts: {delivery.attempts}</span></div><span className={`pill ${delivery.status === "delivered" ? "pill-good" : delivery.status === "failed" ? "pill-danger" : "pill-warning"}`}>{delivery.status}</span></div>)}</div> : <p className="muted">No notification deliveries yet.</p>}</div>
         </section>
         {projects.isError && <p className="error">Unable to load monitored projects for this organization.</p>}
         <section className="project-list">{projects.data?.length ? projects.data.map((project) => <ProjectCard key={project.id} project={project} organizationId={selectedOrganizationId!} />) : <div className="empty-state"><div className="empty-icon">⌁</div><h2>No monitored projects</h2><p className="muted">Register a GitLab project above to start tracking pipeline state.</p></div>}</section>
@@ -198,6 +199,7 @@ function AuthenticatedApp() {
 
 function App() {
   const [authenticated, setAuthenticated] = useState(false);
+  useEffect(() => { document.documentElement.dataset.theme = localStorage.getItem("rg-theme") ?? "dark"; }, []);
   return authenticated ? <AuthenticatedApp /> : <LoginView onLogin={() => setAuthenticated(true)} />;
 }
 
