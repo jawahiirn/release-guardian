@@ -131,6 +131,8 @@ def format_pipeline_failure(
 ) -> dict[str, Any]:
     raw_facts = event.get("facts")
     facts = raw_facts if isinstance(raw_facts, dict) else {}
+    if facts.get("candidate_sha") and facts.get("production_sha"):
+        return _format_release_composition(event, facts, analysis)
     pipeline_id = str(facts.get("pipeline_id", "unknown"))
     ref = str(facts.get("ref", "unknown"))
     merge_request_iid = facts.get("merge_request_iid")
@@ -213,6 +215,19 @@ def format_pushover_message(
 
     raw_facts = event.get("facts")
     facts = raw_facts if isinstance(raw_facts, dict) else {}
+    if facts.get("candidate_sha") and facts.get("production_sha"):
+        candidate_ref = str(facts.get("candidate_ref", "candidate"))
+        production_ref = str(facts.get("production_ref", "production"))
+        count = int(facts.get("included_commit_count") or 0)
+        ci_status = str(facts.get("ci_status", "unknown"))
+        summary = str(analysis.get("summary", "")).strip() if analysis else ""
+        title = f"Release candidate · {candidate_ref} → {production_ref}"[:250]
+        message = (
+            f"{count} commit(s) included. CI: {ci_status}. QA approval: unknown."
+        )
+        if summary:
+            message += f"\n\n{summary}"
+        return title, message[:1024]
     status = str(facts.get("status", "failed"))
     ref = str(facts.get("ref", "unknown"))
     pipeline_id = str(facts.get("pipeline_id", "unknown"))
@@ -226,3 +241,45 @@ def format_pushover_message(
     if summary:
         message += f"\n\n{summary}"
     return title, message[:1024]
+
+
+def _format_release_composition(
+    event: dict[str, Any], facts: dict[str, Any], analysis: dict[str, Any] | None
+) -> dict[str, Any]:
+    candidate_ref = str(facts.get("candidate_ref", "candidate"))
+    production_ref = str(facts.get("production_ref", "production"))
+    candidate_sha = str(facts.get("candidate_sha", "unknown"))
+    production_sha = str(facts.get("production_sha", "unknown"))
+    commit_count = int(facts.get("included_commit_count") or 0)
+    ci_status = str(facts.get("ci_status", "unknown"))
+    summary = str(analysis.get("summary", "")).strip() if analysis else ""
+    web_url = str(facts.get("web_url", ""))
+    safe_url = web_url if web_url.startswith("https://") else ""
+    project_name = str(event.get("project_name") or "GitLab project")[:200]
+    return {
+        "embeds": [
+            {
+                "title": f"Release candidate · {candidate_ref} → {production_ref}",
+                "description": f"**{project_name}**\n{commit_count} commit(s) in candidate",
+                "url": safe_url or None,
+                "color": 0x2ECC71 if ci_status == "success" else 0xF39C12,
+                "fields": [
+                    {
+                        "name": "Exact refs",
+                        "value": (
+                            f"{production_ref}: `{production_sha}`\n"
+                            f"{candidate_ref}: `{candidate_sha}`"
+                        )[:1024],
+                    },
+                    {"name": "Candidate CI", "value": ci_status[:1024]},
+                    {"name": "QA approval", "value": "unknown"},
+                    {
+                        "name": "Advisory analysis",
+                        "value": (summary or "Review included commits and changed paths.")[:1024],
+                    },
+                ],
+                "footer": {"text": "Release Guardian · QA status is not inferred from CI"},
+            }
+        ],
+        "allowed_mentions": {"parse": []},
+    }

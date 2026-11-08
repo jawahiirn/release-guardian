@@ -77,6 +77,8 @@ The current monitoring slice adds GitLab project registration and a PostgreSQL-b
 
 The worker persists polling checkpoints and canonical failed-pipeline events with bounded failed-job evidence. Event uniqueness prevents duplicate events when the same pipeline state is observed again. Actual GitLab requests are read-only and require the GitLab hostname to be listed in `GITLAB_ALLOWED_HOSTS`; the default is `gitlab.com`. The first monitoring tests use injected fixtures and do not contact a real GitLab account.
 
+Each successful project poll also compares the configured production and staging refs through GitLab's read-only repository comparison API. A new candidate revision creates a deduplicated `release.composition` event containing the exact production and candidate SHAs, bounded included commits and changed paths, the latest observed staging CI status, and an explicit `qa_status` of `unknown`. Green CI is never treated as QA approval.
+
 For GitLab fine-grained personal access tokens, `Project: Read` alone is not enough for polling. Grant the token `Pipeline: Read` for the project; this covers the pipeline and pipeline-job endpoints used by the worker. If your GitLab version exposes a separate job permission for the additional job metadata or trace endpoints added later, grant only its read permission. A legacy token with the `read_api` scope is an alternative for local testing.
 
 ## Milestone 4 analysis slice

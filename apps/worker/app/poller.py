@@ -11,7 +11,7 @@ from sqlalchemy import Engine, text
 from apps.worker.app.delivery import enqueue_event_notifications
 from packages.crypto import SecretCipher
 from packages.gitlab import GitLabClient, GitLabClientError
-from packages.monitoring import pipeline_event, polling_delay_seconds
+from packages.monitoring import pipeline_event, polling_delay_seconds, release_composition_event
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,12 @@ class PollingClient(Protocol):
     def recent_pipelines(self, external_project_id: str) -> list[dict[str, Any]]: ...
 
     def pipeline_jobs(self, external_project_id: str, pipeline_id: str) -> list[dict[str, Any]]: ...
+
+    def branch(self, external_project_id: str, ref: str) -> dict[str, Any]: ...
+
+    def compare_refs(
+        self, external_project_id: str, *, from_ref: str, to_ref: str
+    ) -> dict[str, Any]: ...
 
 
 ClientFactory = Callable[[str, str], PollingClient]
@@ -119,8 +125,46 @@ def _poll_project(
         "last_poll_at": project["last_poll_at"],
     }
     pipelines = client.recent_pipelines(str(project["external_project_id"]))
+    composition_event: dict[str, Any] | None = None
+    composition_error: str | None = None
+    production_ref = str(project["branch_config"].get("production", ""))
+    staging_ref = str(project["branch_config"].get("staging", ""))
+    if production_ref and staging_ref:
+        try:
+            production_branch = client.branch(
+                str(project["external_project_id"]), production_ref
+            )
+            staging_branch = client.branch(str(project["external_project_id"]), staging_ref)
+            comparison = client.compare_refs(
+                str(project["external_project_id"]),
+                from_ref=production_ref,
+                to_ref=staging_ref,
+            )
+            staging_pipeline = next(
+                (
+                    pipeline
+                    for pipeline in pipelines
+                    if str(pipeline.get("ref", "")).casefold() == staging_ref.casefold()
+                ),
+                None,
+            )
+            composition_event = release_composition_event(
+                project_data,
+                production_branch,
+                staging_branch,
+                comparison,
+                ci_status=(
+                    str(staging_pipeline.get("status", "unknown"))
+                    if staging_pipeline
+                    else "unknown"
+                ),
+                observed_at=observed_at,
+            )
+        except GitLabClientError as exc:
+            composition_error = f"release comparison unavailable: {exc}"[:500]
     event_ids: list[str] = []
     with engine.begin() as connection:
+        events: list[dict[str, Any]] = []
         for pipeline in pipelines[:20]:
             pipeline_id = str(pipeline.get("id", ""))
             jobs = (
@@ -129,8 +173,11 @@ def _poll_project(
                 else []
             )
             event = pipeline_event(project_data, pipeline, jobs, observed_at=observed_at)
-            if event is None:
-                continue
+            if event is not None:
+                events.append(event)
+        if composition_event is not None:
+            events.append(composition_event)
+        for event in events:
             inserted = connection.execute(
                 text(
                     """
@@ -175,7 +222,7 @@ def _poll_project(
                 """
                 UPDATE poll_checkpoints
                 SET last_poll_at = :last_poll_at, last_success_at = :last_success_at,
-                    next_poll_at = :next_poll_at, last_error = NULL, retry_count = 0,
+                    next_poll_at = :next_poll_at, last_error = :last_error, retry_count = 0,
                     lease_owner = NULL, lease_expires_at = NULL
                 WHERE project_id = :project_id
                 """
@@ -184,6 +231,7 @@ def _poll_project(
                 "last_poll_at": observed_at,
                 "last_success_at": observed_at,
                 "next_poll_at": next_poll_at,
+                "last_error": composition_error,
                 "project_id": project["id"],
             },
         )

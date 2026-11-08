@@ -1,6 +1,11 @@
 from datetime import UTC, datetime
 
-from packages.monitoring import failed_pipeline_event, pipeline_event, polling_delay_seconds
+from packages.monitoring import (
+    failed_pipeline_event,
+    pipeline_event,
+    polling_delay_seconds,
+    release_composition_event,
+)
 
 
 def test_failed_tracked_pipeline_becomes_bounded_event() -> None:
@@ -60,3 +65,28 @@ def test_polling_backoff_is_bounded() -> None:
     assert polling_delay_seconds(300, 0) == 300
     assert polling_delay_seconds(300, 1) == 600
     assert polling_delay_seconds(300, 10) == 3600
+
+
+def test_release_composition_has_exact_shas_and_unknown_qa_status() -> None:
+    event = release_composition_event(
+        {"branch_config": {"staging": "Stage", "production": "Main"}},
+        {"commit": {"id": "production-sha"}},
+        {"commit": {"id": "candidate-sha", "created_at": "2026-11-09T00:00:00Z"}},
+        {
+            "commits": [
+                {"id": "candidate-sha", "short_id": "candidate", "title": "Release change"}
+            ],
+            "diffs": [{"new_path": "src/release.py"}],
+            "web_url": "https://gitlab.com/example/project/-/compare/Main...Stage",
+        },
+        ci_status="success",
+    )
+
+    assert event is not None
+    assert event["event_type"] == "release.composition"
+    assert event["meaningful_state_version"] == "production-sha:candidate-sha"
+    assert event["facts"]["production_sha"] == "production-sha"
+    assert event["facts"]["candidate_sha"] == "candidate-sha"
+    assert event["facts"]["qa_status"] == "unknown"
+    assert event["facts"]["ci_status"] == "success"
+    assert event["facts"]["changed_paths"] == ["src/release.py"]

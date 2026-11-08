@@ -5,7 +5,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -86,3 +86,21 @@ class GitLabClient:
         if not isinstance(result, list):
             raise GitLabClientError("GitLab jobs response was not a list")
         return [item for item in result if isinstance(item, dict)]
+
+    def branch(self, external_project_id: str, ref: str) -> dict[str, Any]:
+        project = quote(external_project_id, safe="")
+        branch = quote(ref, safe="")
+        result = self._get_json(f"projects/{project}/repository/branches/{branch}")
+        if not isinstance(result, dict):
+            raise GitLabClientError("GitLab branch response was not an object")
+        return result
+
+    def compare_refs(
+        self, external_project_id: str, *, from_ref: str, to_ref: str
+    ) -> dict[str, Any]:
+        project = quote(external_project_id, safe="")
+        query = urlencode({"from": from_ref, "to": to_ref, "straight": "true"})
+        result = self._get_json(f"projects/{project}/repository/compare?{query}")
+        if not isinstance(result, dict):
+            raise GitLabClientError("GitLab compare response was not an object")
+        return result

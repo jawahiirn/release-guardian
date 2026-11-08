@@ -73,6 +73,30 @@ def evidence_hash(facts: dict[str, Any]) -> str:
 
 
 def fallback_analysis(facts: dict[str, Any]) -> ReleaseAnalysis:
+    if facts.get("candidate_sha") and facts.get("production_sha"):
+        candidate_ref = str(facts.get("candidate_ref") or "candidate")
+        production_ref = str(facts.get("production_ref") or "production")
+        commit_count = int(facts.get("included_commit_count") or 0)
+        ci_status = str(facts.get("ci_status") or "unknown")
+        return ReleaseAnalysis(
+            severity="info" if ci_status == "success" else "warning",
+            summary=(
+                f"{candidate_ref} contains {commit_count} commit(s) not present in "
+                f"{production_ref}; QA approval remains unknown."
+            ),
+            likely_causes=[],
+            supporting_facts=[
+                f"Production {production_ref} is at {facts['production_sha']}.",
+                f"Candidate {candidate_ref} is at {facts['candidate_sha']}.",
+                f"Latest candidate CI status is {ci_status}.",
+            ],
+            unknowns=["QA approval and release readiness are unknown."],
+            suggested_actions=[
+                "Review the included commits, changed paths, CI results, and QA evidence "
+                "before promotion."
+            ],
+            confidence="high",
+        )
     ref = str(facts.get("ref") or "unknown ref")
     pipeline_id = str(facts.get("pipeline_id") or "unknown pipeline")
     sha = str(facts.get("sha") or "unknown SHA")

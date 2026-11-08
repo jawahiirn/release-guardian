@@ -33,6 +33,24 @@ def test_fallback_analysis_is_factual_and_advisory() -> None:
     assert analysis.likely_causes == []
 
 
+def test_release_composition_fallback_never_infers_qa_from_green_ci() -> None:
+    analysis = fallback_analysis(
+        {
+            "production_ref": "Main",
+            "production_sha": "production-sha",
+            "candidate_ref": "Stage",
+            "candidate_sha": "candidate-sha",
+            "included_commit_count": 3,
+            "ci_status": "success",
+            "qa_status": "unknown",
+        }
+    )
+
+    assert "QA approval remains unknown" in analysis.summary
+    assert "QA approval and release readiness are unknown." in analysis.unknowns
+    assert analysis.confidence == "high"
+
+
 class FakeResponse:
     def __init__(self, payload: dict) -> None:
         self.payload = payload

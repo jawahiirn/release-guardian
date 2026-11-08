@@ -142,3 +142,24 @@ def test_pushover_message_is_bounded_and_keeps_analysis_advisory() -> None:
     assert title == "Pipeline failed · Stage"
     assert "Likely test failure" in message
     assert len(message) <= 1024
+
+
+def test_release_composition_notification_marks_qa_unknown() -> None:
+    message = format_pipeline_failure(
+        {
+            "project_name": "Example",
+            "facts": {
+                "production_ref": "Main",
+                "production_sha": "production-sha",
+                "candidate_ref": "Stage",
+                "candidate_sha": "candidate-sha",
+                "included_commit_count": 2,
+                "ci_status": "success",
+            },
+        },
+        {"summary": "Review the candidate before promotion."},
+    )
+
+    embed = message["embeds"][0]
+    assert embed["title"] == "Release candidate · Stage → Main"
+    assert any(field == {"name": "QA approval", "value": "unknown"} for field in embed["fields"])

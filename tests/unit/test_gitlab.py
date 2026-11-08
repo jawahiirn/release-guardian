@@ -50,3 +50,22 @@ def test_gitlab_host_allowlist_rejects_unsafe_or_unapproved_hosts() -> None:
         validate_gitlab_host("http://gitlab.com")
     with pytest.raises(GitLabClientError):
         validate_gitlab_host("https://gitlab.internal", {"gitlab.com"})
+
+
+def test_gitlab_client_compares_release_refs_with_read_only_request() -> None:
+    requests = []
+
+    def request_fn(request, timeout):
+        requests.append((request, timeout))
+        return FakeResponse({"commits": [], "diffs": []})
+
+    client = GitLabClient("https://gitlab.com", "test-token", request_fn=request_fn)
+    result = client.compare_refs("group/project", from_ref="Main", to_ref="Stage")
+
+    assert result == {"commits": [], "diffs": []}
+    request = requests[0][0]
+    assert request.method == "GET"
+    assert "/repository/compare?" in request.full_url
+    assert "from=Main" in request.full_url
+    assert "to=Stage" in request.full_url
+    assert "straight=true" in request.full_url
