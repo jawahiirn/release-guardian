@@ -170,11 +170,38 @@ def test_invitation_acceptance_creates_membership_and_team_assignment(
         json={"email": invitee_email, "password": "invitee-password"},
     )
     assert invitee_login.status_code == 200
+    invitee_csrf = invitee_login.json()["csrf_token"]
     organizations = invitee.get("/api/v1/organizations").json()
     assert any(item["id"] == organization_id and item["role"] == "member" for item in organizations)
 
     members = owner.get(f"/api/v1/organizations/{organization_id}/members").json()
     invitee_id = next(item["user_id"] for item in members if item["email"] == invitee_email)
+    role_update = owner.put(
+        f"/api/v1/organizations/{organization_id}/members/{invitee_id}",
+        json={"role": "admin"},
+        headers=headers,
+    )
+    assert role_update.status_code == 200
+    assert role_update.json()["role"] == "admin"
+
+    password_change = invitee.put(
+        "/api/v1/auth/password",
+        json={
+            "current_password": "invitee-password",
+            "new_password": "replacement-password",
+        },
+        headers={"X-CSRF-Token": invitee_csrf},
+    )
+    assert password_change.status_code == 204
+    fresh_client = TestClient(api_main.app)
+    assert fresh_client.post(
+        "/api/v1/auth/login",
+        json={"email": invitee_email, "password": "invitee-password"},
+    ).status_code == 401
+    assert fresh_client.post(
+        "/api/v1/auth/login",
+        json={"email": invitee_email, "password": "replacement-password"},
+    ).status_code == 200
     team = owner.post(
         f"/api/v1/organizations/{organization_id}/teams",
         json={"name": "Release Team"},
@@ -189,3 +216,13 @@ def test_invitation_acceptance_creates_membership_and_team_assignment(
     assert assignment.status_code == 204
     teams = owner.get(f"/api/v1/organizations/{organization_id}/teams").json()
     assert teams[0]["member_ids"] == [invitee_id]
+
+    removal = owner.delete(
+        f"/api/v1/organizations/{organization_id}/members/{invitee_id}",
+        headers=headers,
+    )
+    assert removal.status_code == 204
+    teams_after_removal = owner.get(
+        f"/api/v1/organizations/{organization_id}/teams"
+    ).json()
+    assert teams_after_removal[0]["member_ids"] == []

@@ -86,6 +86,8 @@ The frontend now includes a sign-in screen and an Integrations workspace. It sup
 
 Organization owners and admins can create seven-day invitation tokens, list members, create teams, and assign organization members to teams through the versioned API. Invitation acceptance creates a user when the invited email is new, or verifies the existing user's password before adding membership. Raw invitation tokens are returned only by the create response for manual sharing and are stored only as hashes.
 
+Authenticated users can replace their password after verifying the current password; other active sessions are revoked. Organization owners and admins can promote or demote non-owner members and remove them, which also removes their team assignments. Owner membership cannot be changed or removed through these endpoints.
+
 The Organization workspace exposes member, invitation, team creation, and team-assignment controls. Invitees can open `/accept-invitation`, paste the one-time token, choose a password, and then sign in normally.
 
 ## Milestone 3 monitoring slice

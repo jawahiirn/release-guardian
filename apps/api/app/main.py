@@ -114,6 +114,11 @@ class MeResponse(BaseModel):
     email: EmailStr
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=12, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 class OrganizationResponse(BaseModel):
     id: str
     name: str
@@ -144,6 +149,10 @@ class MembershipResponse(BaseModel):
     user_id: str
     email: EmailStr
     role: Literal["owner", "admin", "member"]
+
+
+class MembershipUpdate(BaseModel):
+    role: Literal["admin", "member"]
 
 
 class TeamCreate(BaseModel):
@@ -590,6 +599,38 @@ def me(session: Annotated[dict, Depends(current_session)]) -> dict[str, str]:
     return {"id": str(session["user_id"]), "email": session["email"]}
 
 
+@app.put(
+    "/api/v1/auth/password",
+    status_code=204,
+    tags=["auth"],
+    summary="Change the current user's password and revoke other sessions",
+)
+def change_password(
+    payload: PasswordChangeRequest, session: Annotated[dict, Depends(require_csrf)]
+) -> None:
+    with engine.begin() as connection:
+        password_hash = connection.execute(
+            text("SELECT password_hash FROM users WHERE id = :user_id"),
+            {"user_id": session["user_id"]},
+        ).scalar_one()
+        if not verify_password(password_hash, payload.current_password):
+            raise HTTPException(status_code=401, detail="invalid current password")
+        connection.execute(
+            text("UPDATE users SET password_hash = :password_hash WHERE id = :user_id"),
+            {
+                "password_hash": hash_password(payload.new_password),
+                "user_id": session["user_id"],
+            },
+        )
+        connection.execute(
+            text(
+                "UPDATE sessions SET revoked_at = now() "
+                "WHERE user_id = :user_id AND id <> :session_id AND revoked_at IS NULL"
+            ),
+            {"user_id": session["user_id"], "session_id": session["id"]},
+        )
+
+
 @app.get(
     "/api/v1/organizations",
     response_model=list[OrganizationResponse],
@@ -680,6 +721,112 @@ def list_members(
             .all()
         )
     return [{**dict(row), "user_id": str(row["user_id"])} for row in rows]
+
+
+@app.put(
+    "/api/v1/organizations/{organization_id}/members/{user_id}",
+    response_model=MembershipResponse,
+    tags=["organizations"],
+    summary="Update an organization member role",
+)
+def update_member(
+    organization_id: str,
+    user_id: UUID,
+    payload: MembershipUpdate,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> dict:
+    with engine.begin() as connection:
+        require_org_admin(connection, organization_id, str(session["user_id"]))
+        member = (
+            connection.execute(
+                text(
+                    """
+                    SELECT u.email, m.role FROM memberships m
+                    JOIN users u ON u.id = m.user_id
+                    WHERE m.organization_id = :organization_id AND m.user_id = :user_id
+                    """
+                ),
+                {"organization_id": organization_id, "user_id": str(user_id)},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if member is None:
+            raise HTTPException(status_code=404, detail="organization member not found")
+        if member["role"] == "owner":
+            raise HTTPException(status_code=422, detail="owner role cannot be changed")
+        connection.execute(
+            text(
+                "UPDATE memberships SET role = :role "
+                "WHERE organization_id = :organization_id AND user_id = :user_id"
+            ),
+            {
+                "role": payload.role,
+                "organization_id": organization_id,
+                "user_id": str(user_id),
+            },
+        )
+        audit(
+            connection,
+            organization_id,
+            str(session["user_id"]),
+            "membership.role_updated",
+            str(user_id),
+            {"role": payload.role},
+        )
+    return {"user_id": str(user_id), "email": member["email"], "role": payload.role}
+
+
+@app.delete(
+    "/api/v1/organizations/{organization_id}/members/{user_id}",
+    status_code=204,
+    tags=["organizations"],
+    summary="Remove a non-owner organization member",
+)
+def remove_member(
+    organization_id: str,
+    user_id: UUID,
+    session: Annotated[dict, Depends(require_csrf)],
+) -> None:
+    with engine.begin() as connection:
+        require_org_admin(connection, organization_id, str(session["user_id"]))
+        role = connection.execute(
+            text(
+                "SELECT role FROM memberships "
+                "WHERE organization_id = :organization_id AND user_id = :user_id"
+            ),
+            {"organization_id": organization_id, "user_id": str(user_id)},
+        ).scalar_one_or_none()
+        if role is None:
+            raise HTTPException(status_code=404, detail="organization member not found")
+        if role == "owner":
+            raise HTTPException(status_code=422, detail="owner cannot be removed")
+        connection.execute(
+            text(
+                """
+                DELETE FROM team_members
+                WHERE user_id = :user_id AND team_id IN (
+                    SELECT id FROM teams WHERE organization_id = :organization_id
+                )
+                """
+            ),
+            {"organization_id": organization_id, "user_id": str(user_id)},
+        )
+        connection.execute(
+            text(
+                "DELETE FROM memberships "
+                "WHERE organization_id = :organization_id AND user_id = :user_id"
+            ),
+            {"organization_id": organization_id, "user_id": str(user_id)},
+        )
+        audit(
+            connection,
+            organization_id,
+            str(session["user_id"]),
+            "membership.removed",
+            str(user_id),
+            {},
+        )
 
 
 @app.post(
