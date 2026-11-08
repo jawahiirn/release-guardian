@@ -1,10 +1,10 @@
 import type { ButtonHTMLAttributes } from "react";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "ghost";
+  variant?: "primary" | "ghost" | "danger";
+  size?: "sm" | "md";
 };
 
-export function Button({ variant = "primary", className = "", ...props }: ButtonProps) {
-  const variantClass = variant === "primary" ? "primary" : "ghost";
-  return <button className={`${variantClass} ${className}`.trim()} {...props} />;
+export function Button({ variant = "primary", size = "md", className = "", ...props }: ButtonProps) {
+  return <button className={`button button-${variant} button-${size} ${className}`.trim()} {...props} />;
 }
