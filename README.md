@@ -15,6 +15,8 @@ Release Guardian is a self-hosted release monitoring application. The MVP is adv
 4. Check API liveness at <http://localhost:8000/health/live> and readiness at <http://localhost:8000/health/ready>.
 5. Open Swagger UI at <http://localhost:8000/docs>, ReDoc at <http://localhost:8000/redoc>, or the raw OpenAPI document at <http://localhost:8000/openapi.json>.
 
+The Docker development frontend uses polling for Vite file watching because Docker Desktop can drop native file-change events when the repository is mounted from Windows or macOS. Set `VITE_USE_POLLING=false` in `.env` to opt out on filesystems with reliable event forwarding.
+
 ## pgAdmin connection
 
 With the Compose database running, register a PostgreSQL server in pgAdmin using:
