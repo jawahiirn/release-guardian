@@ -59,6 +59,17 @@ npm run lint
 npm run test
 ```
 
+PostgreSQL integration tests use a separate ephemeral Docker database and never reset the development database:
+
+```powershell
+docker compose -f compose.integration.yaml up -d --wait
+$env:TEST_DATABASE_URL = "postgresql+psycopg://release_guardian_test:release_guardian_test@127.0.0.1:55433/release_guardian_test"
+uv run --extra dev pytest tests/integration -q
+docker compose -f compose.integration.yaml down
+```
+
+Without `TEST_DATABASE_URL`, the PostgreSQL integration tests are skipped.
+
 ## Milestone 2 integration configuration
 
 The current slice adds organization-scoped integration metadata, encrypted write-only secrets, live credential replacement, and audit records. After bootstrapping an administrator and creating an organization, use Swagger at `/docs` to call:
